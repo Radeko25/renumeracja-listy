@@ -2,7 +2,6 @@ package pl.com.razi.listy.przesuwanie;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 
 import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga.TrybPrzesuwania;
@@ -65,8 +64,8 @@ class PrzesuwanieObliczenia {
 			return true;
 
 		case LINIOWE:
-			return kierunek == Kierunek.GORA ? blokGraniczny.start + przesuniecie >= startListy
-					: blokGraniczny.end + przesuniecie <= koniecListy;
+			return kierunek == Kierunek.GORA ? (long) blokGraniczny.start + przesuniecie >= startListy
+					: (long) blokGraniczny.end + przesuniecie <= koniecListy;
 
 		case DOCISKAJACE:
 			if (blokiWybranych.size() > 1) {
@@ -139,25 +138,26 @@ class PrzesuwanieObliczenia {
 			PrzesuwanieIndeksyBlok blok = blokiWybranych.get(i);
 
 			final int dlugosc = blok.end - blok.start + 1;
-			int start = blok.start + przesuniecie;
+			final long przesunietyStart = (long) blok.start + przesuniecie;
+			int start;
 
 			switch (trybPrzesuwania) {
 
 			case CYKLICZNE:
-				start = Math.floorMod(start - 1, rozmiarListy) + 1;
+				start = (int) (Math.floorMod(przesunietyStart - 1L, (long) rozmiarListy) + 1L);
 				break;
 
 			case LINIOWE:
-				start = Math.max(1, Math.min(start, rozmiarListy));
+				start = (int) Math.max(1L, Math.min(przesunietyStart, (long) rozmiarListy));
 				break;
 
 			case DOCISKAJACE:
 				if (kierunek == Kierunek.GORA) {
-					start = Math.max(start, limitGora);
+					start = (int) Math.max(przesunietyStart, (long) limitGora);
 					limitGora = start + dlugosc;
 				} else {
 					int maxStart = limitDol - dlugosc + 1;
-					start = Math.min(start, maxStart);
+					start = (int) Math.min(przesunietyStart, (long) maxStart);
 					limitDol = start - 1;
 				}
 
@@ -207,58 +207,51 @@ class PrzesuwanieObliczenia {
 	 * Na podstawie docelowej permutacji tworzy plan przesunięć w postaci ciągów
 	 * starych indeksów wraz z ich wspólnym offsetem.
 	 * <p>
-	 * Łączy kolejne pozycje o tym samym przesunięciu w jeden blok, co upraszcza
-	 * aktualizację danych np. w bazie SQL.
+	 * Łączy każdą maksymalną spójną sekwencję pozycji o tym samym niezerowym
+	 * przesunięciu w jedną operację. Daje to minimalną liczbę operacji w modelu
+	 * „spójny zakres LP + stały offset”, używanym później np. przez SQL CASE WHEN.
+	 * Implementacja wykonuje pojedyncze przejście O(n), bez sortowania i bez
+	 * tworzenia obiektu pomocniczego dla każdej zmienionej pozycji.
 	 */
 	static PrzesuwaniePlan generujPlan(final int[] docelowaPermutacja, final int rozmiarListy) {
 
-		class Move {
-			final int oldLp;
-			final int offset;
-
-			private Move(int oldLp, int offset) {
-				this.oldLp = oldLp;
-				this.offset = offset;
-			}
-		}
-
 		final PrzesuwaniePlan plan = new PrzesuwaniePlan();
-		final List<Move> lista = new ArrayList<>();
+
+		int start = -1;
+		int poprzedni = -1;
+		int aktualnyOffset = 0;
 
 		for (int oldLp = 1; oldLp <= rozmiarListy; oldLp++) {
-
 			final int newLp = docelowaPermutacja[oldLp - 1];
 			final int offset = newLp - oldLp;
 
-			if (offset != 0) {
-				final Move mv = new Move(oldLp, offset);
-				lista.add(mv);
+			if (offset == 0) {
+				if (start != -1) {
+					plan.dodaj(start, poprzedni, aktualnyOffset);
+					start = -1;
+				}
+				continue;
 			}
-		}
 
-		if (lista.isEmpty()) {
-			return plan;
-		}
-
-		lista.sort(Comparator.comparingInt(a -> a.oldLp));
-
-		int start = lista.get(0).oldLp;
-		int prev = start;
-		int offset = lista.get(0).offset;
-
-		for (int i = 1; i < lista.size(); i++) {
-			final Move mv = lista.get(i);
-
-			if (mv.oldLp == prev + 1 && mv.offset == offset) {
-				prev = mv.oldLp;
-			} else {
-				plan.dodaj(start, prev, offset);
-				start = prev = mv.oldLp;
-				offset = mv.offset;
+			if (start == -1) {
+				start = poprzedni = oldLp;
+				aktualnyOffset = offset;
+				continue;
 			}
+
+			if (oldLp == poprzedni + 1 && offset == aktualnyOffset) {
+				poprzedni = oldLp;
+				continue;
+			}
+
+			plan.dodaj(start, poprzedni, aktualnyOffset);
+			start = poprzedni = oldLp;
+			aktualnyOffset = offset;
 		}
 
-		plan.dodaj(start, prev, offset);
+		if (start != -1) {
+			plan.dodaj(start, poprzedni, aktualnyOffset);
+		}
 
 		return plan;
 	}

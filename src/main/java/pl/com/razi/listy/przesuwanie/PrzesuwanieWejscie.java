@@ -1,10 +1,10 @@
 package pl.com.razi.listy.przesuwanie;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga.TrybPrzesuwania;
 import pl.com.razi.listy.przesuwanie.model.PrzesuwanieIndeksyBlok;
@@ -14,18 +14,6 @@ import pl.com.razi.listy.przesuwanie.wyjatki.PrzesuwanieBrakElementuException;
  * Klasa pomocnicza odpowiedzialna za walidację danych wejściowych oraz
  * przetwarzanie listy źródłowej przed przekazaniem jej do właściwych obliczeń
  * przesunięcia.
- * <p>
- * Metody dostarczają:
- * <ul>
- * <li>weryfikację poprawności list wejściowych,</li>
- * <li>sprawdzenie istnienia elementów wybranych w liście źródłowej,</li>
- * <li>obliczenie rzeczywistej wartości przesunięcia (np. w trybie
- * cyklicznym),</li>
- * <li>zbudowanie ciągłych bloków indeksów na podstawie kolejności występowania
- * elementów na liście.</li>
- * </ul>
- * Klasa jest wyłącznie pomocnicza i nie powinna być używana bezpośrednio poza
- * mechanizmem przesuwania.
  */
 class PrzesuwanieWejscie {
 
@@ -34,13 +22,15 @@ class PrzesuwanieWejscie {
 	}
 
 	/**
-	 * Weryfikuje, czy wszystkie elementy wybrane występują na liście źródłowej.
+	 * Weryfikuje, czy wszystkie elementy wybrane występują na liście źródłowej
+	 * w wymaganej liczbie wystąpień.
 	 * <p>
-	 * Jeśli lista wybranych jest pusta lub null – walidacja przechodzi pozytywnie.
-	 * W przeciwnym wypadku metoda sprawdza, czy każdy element wybrany znajduje się
-	 * w liście źródłowej, jeśli nie – rzucany jest wyjątek.
+	 * Jeżeli lista wybranych jest pusta lub {@code null}, walidacja przechodzi
+	 * pozytywnie. Elementy są porównywane zgodnie z kontraktem {@link Object#equals(Object)}
+	 * i {@link Object#hashCode()}.
 	 */
-	public static <T> void walidacjaDanych(List<T> wszystkie, List<T> wybrane) throws PrzesuwanieBrakElementuException {
+	public static <T> void walidacjaDanych(List<T> wszystkie, List<T> wybrane)
+			throws PrzesuwanieBrakElementuException {
 
 		if (wybrane == null || wybrane.isEmpty()) {
 			return;
@@ -50,11 +40,21 @@ class PrzesuwanieWejscie {
 			throw new PrzesuwanieBrakElementuException();
 		}
 
-		Set<T> zbior = new HashSet<>(wszystkie);
+		Map<T, Integer> dostepneWystapienia = new HashMap<>();
+		for (T element : wszystkie) {
+			dostepneWystapienia.merge(element, 1, Integer::sum);
+		}
 
 		for (T element : wybrane) {
-			if (!zbior.contains(element)) {
+			Integer liczba = dostepneWystapienia.get(element);
+			if (liczba == null || liczba == 0) {
 				throw new PrzesuwanieBrakElementuException();
+			}
+
+			if (liczba == 1) {
+				dostepneWystapienia.remove(element);
+			} else {
+				dostepneWystapienia.put(element, liczba - 1);
 			}
 		}
 	}
@@ -62,13 +62,6 @@ class PrzesuwanieWejscie {
 	/**
 	 * Sprawdza minimalne warunki umożliwiające wykonanie jakiegokolwiek
 	 * przesunięcia.
-	 * <p>
-	 * Zwraca {@code true}, jeśli:
-	 * <ul>
-	 * <li>lista źródłowa nie jest pusta,</li>
-	 * <li>lista wybranych elementów nie jest pusta,</li>
-	 * <li>wartość przesunięcia jest różna od zera.</li>
-	 * </ul>
 	 */
 	public static <T> boolean czyParametryPrzesuwaniaPoprawne(List<T> wszystkie, List<T> wybrane, int przesuniecie) {
 		if (wszystkie == null || wszystkie.isEmpty()) {
@@ -77,18 +70,12 @@ class PrzesuwanieWejscie {
 		if (wybrane == null || wybrane.isEmpty()) {
 			return false;
 		}
-		if (przesuniecie == 0) {
-			return false;
-		}
-		return true;
+		return przesuniecie != 0;
 	}
 
 	/**
 	 * Oblicza ostateczną wartość przesunięcia, uwzględniając tryb pracy.
-	 * <p>
-	 * W trybie <b>CYKLICZNYM</b> przesunięcie jest redukowane modulo rozmiar listy,
-	 * aby każdorazowo mieściło się w zakresie. W pozostałych trybach zwracana jest
-	 * wartość wejściowa bez zmian.
+	 * W trybie cyklicznym przesunięcie jest redukowane modulo rozmiar listy.
 	 */
 	public static int obliczRzeczywistePrzesuniecie(TrybPrzesuwania trybPrzesuwania, int przesuniecie,
 			int rozmiarListy) {
@@ -96,32 +83,79 @@ class PrzesuwanieWejscie {
 	}
 
 	/**
-	 * Buduje listę ciągłych bloków indeksów elementów wybranych na podstawie
-	 * kolejności ich występowania w liście źródłowej.
+	 * Buduje ciągłe bloki indeksów elementów wybranych.
 	 * <p>
-	 * Przeszukiwana jest kolejno lista źródłowa, a każdy odnaleziony element
-	 * dodawany jest do bieżącego bloku, jeśli jego indeks bezpośrednio sąsiaduje z
-	 * poprzednim. W przeciwnym przypadku rozpoczynany jest nowy blok.
+	 * Gdy {@code normalizujKolejnoscWybranych == true}, kolejność listy
+	 * {@code wybrane} nie ma znaczenia. Metoda odtwarza wybór w kolejności
+	 * występowania na liście źródłowej bez modyfikowania przekazanej listy.
 	 * <p>
-	 * Metoda zakłada, że elementy z listy wybranych znajdują się w liście źródłowej
-	 * – ewentualne błędy istnienia powinny być wychwycone wcześniej przez
-	 * walidację.
+	 * Gdy parametr ma wartość {@code false}, stosowana jest szybsza ścieżka dla
+	 * callerów, którzy gwarantują, że {@code wybrane} jest już uporządkowane zgodnie
+	 * z kolejnością w {@code wszystkie}. Naruszenie tego kontraktu kończy się
+	 * {@link IllegalArgumentException} zamiast niejawnego uszkodzenia indeksów.
 	 */
-	public static <T> List<PrzesuwanieIndeksyBlok> zbudujBlokiWybranych(List<T> wszystkie, List<T> wybrane) {
-
-		List<PrzesuwanieIndeksyBlok> bloki = new ArrayList<>();
+	public static <T> List<PrzesuwanieIndeksyBlok> zbudujBlokiWybranych(List<T> wszystkie, List<T> wybrane,
+			boolean normalizujKolejnoscWybranych) throws PrzesuwanieBrakElementuException {
 
 		if (wszystkie == null || wybrane == null || wszystkie.isEmpty() || wybrane.isEmpty()) {
-			return bloki;
+			return new ArrayList<>();
 		}
 
+		return normalizujKolejnoscWybranych
+				? zbudujBlokiDlaDowolnejKolejnosci(wszystkie, wybrane)
+				: zbudujBlokiDlaKolejnosciZrodlowej(wszystkie, wybrane);
+	}
+
+	/**
+	 * Zachowuje zgodność z dotychczasowym użyciem wewnętrznym i testowym:
+	 * domyślnie wejście jest normalizowane do kolejności listy źródłowej.
+	 */
+	public static <T> List<PrzesuwanieIndeksyBlok> zbudujBlokiWybranych(List<T> wszystkie, List<T> wybrane) {
+		try {
+			return zbudujBlokiWybranych(wszystkie, wybrane, true);
+		} catch (PrzesuwanieBrakElementuException e) {
+			throw new IllegalArgumentException(e.getMessage(), e);
+		}
+	}
+
+	private static <T> List<PrzesuwanieIndeksyBlok> zbudujBlokiDlaDowolnejKolejnosci(List<T> wszystkie,
+			List<T> wybrane) throws PrzesuwanieBrakElementuException {
+
+		Map<T, Integer> pozostaleWybrane = new HashMap<>();
+		for (T element : wybrane) {
+			pozostaleWybrane.merge(element, 1, Integer::sum);
+		}
+
+		List<Integer> lpWybranych = new ArrayList<>(wybrane.size());
+		for (int i = 0; i < wszystkie.size() && !pozostaleWybrane.isEmpty(); i++) {
+			T element = wszystkie.get(i);
+			Integer pozostalo = pozostaleWybrane.get(element);
+			if (pozostalo == null) {
+				continue;
+			}
+
+			lpWybranych.add(i + 1);
+			if (pozostalo == 1) {
+				pozostaleWybrane.remove(element);
+			} else {
+				pozostaleWybrane.put(element, pozostalo - 1);
+			}
+		}
+
+		if (!pozostaleWybrane.isEmpty()) {
+			throw new PrzesuwanieBrakElementuException();
+		}
+
+		return zbudujBlokiZLp(lpWybranych);
+	}
+
+	private static <T> List<PrzesuwanieIndeksyBlok> zbudujBlokiDlaKolejnosciZrodlowej(List<T> wszystkie,
+			List<T> wybrane) throws PrzesuwanieBrakElementuException {
+
+		List<Integer> lpWybranych = new ArrayList<>(wybrane.size());
 		int startWyszukiwania = 0;
 
-		int startBloku = -1;
-		int poprzedni = -1;
-
 		for (T elem : wybrane) {
-
 			int idx = -1;
 			for (int i = startWyszukiwania; i < wszystkie.size(); i++) {
 				if (Objects.equals(wszystkie.get(i), elem)) {
@@ -131,14 +165,32 @@ class PrzesuwanieWejscie {
 				}
 			}
 
-			int lp = idx + 1;
-
-			if (startBloku == -1) {
-				startBloku = lp;
-				poprzedni = lp;
-				continue;
+			if (idx < 0) {
+				// Ścieżka błędna jest rzadka, więc dopiero tutaj wykonujemy pełną walidację.
+				// Jeżeli elementu/wystąpienia faktycznie brakuje, zachowujemy checked exception.
+				walidacjaDanych(wszystkie, wybrane);
+				throw new IllegalArgumentException(
+						"Lista 'wybrane' nie jest uporządkowana zgodnie z kolejnością listy źródłowej. "
+								+ "Włącz normalizację kolejności wybranych albo przekaż elementy w kolejności źródłowej.");
 			}
 
+			lpWybranych.add(idx + 1);
+		}
+
+		return zbudujBlokiZLp(lpWybranych);
+	}
+
+	private static List<PrzesuwanieIndeksyBlok> zbudujBlokiZLp(List<Integer> lpWybranych) {
+		List<PrzesuwanieIndeksyBlok> bloki = new ArrayList<>();
+		if (lpWybranych.isEmpty()) {
+			return bloki;
+		}
+
+		int startBloku = lpWybranych.get(0);
+		int poprzedni = startBloku;
+
+		for (int i = 1; i < lpWybranych.size(); i++) {
+			int lp = lpWybranych.get(i);
 			if (lp == poprzedni + 1) {
 				poprzedni = lp;
 				continue;
@@ -149,8 +201,6 @@ class PrzesuwanieWejscie {
 		}
 
 		bloki.add(new PrzesuwanieIndeksyBlok(startBloku, poprzedni));
-
 		return bloki;
 	}
-
 }
