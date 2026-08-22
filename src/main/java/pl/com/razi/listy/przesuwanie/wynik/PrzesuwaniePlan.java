@@ -4,31 +4,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Reprezentuje plan przesunięć powstały w wyniku operacji przemieszczenia
- * bloków elementów listy.
+ * Reprezentuje skompresowany plan zmian pozycji (LP).
  * <p>
- * Plan składa się z jednej lub wielu operacji, z których każda opisuje spójny
- * zakres pozycji (LP) przesunięty o stały offset. Taka struktura jest
- * zoptymalizowana do późniejszej aktualizacji danych, np. w bazie SQL przy
- * użyciu instrukcji {@code CASE WHEN}.
- * <p>
- * Klasa jest niemutowalna w części — lista operacji jest finalna, ale może
- * zostać uzupełniona przez wywołania metody {@link #dodaj(int, int, int)}.
+ * Każda operacja opisuje spójny zakres starych LP przesuwany o jeden stały
+ * offset. Plan generowany przez mechanizm przesuwania zawiera maksymalne takie
+ * zakresy, a więc minimalną liczbę operacji w tym modelu reprezentacji.
  */
 public class PrzesuwaniePlan {
 
-	/**
-	 * Pojedyncza operacja przesunięcia bloku.
-	 * <p>
-	 * Zawiera informacje:
-	 * <ul>
-	 * <li>{@code lpOd} – początek zakresu (włącznie),</li>
-	 * <li>{@code lpDo} – koniec zakresu (włącznie),</li>
-	 * <li>{@code offset} – przesunięcie o stałą wartość (ujemne lub dodatnie).</li>
-	 * </ul>
-	 */
 	public static class PrzesuwanieOperacja {
-
 		public final int lpOd;
 		public final int lpDo;
 		public final int offset;
@@ -38,7 +22,6 @@ public class PrzesuwaniePlan {
 			this.lpDo = lpDo;
 			this.offset = offset;
 		}
-
 	}
 
 	private final List<PrzesuwanieOperacja> operacje = new ArrayList<>();
@@ -49,34 +32,39 @@ public class PrzesuwaniePlan {
 		}
 	}
 
+	/**
+	 * Zwraca niemodyfikowalny snapshot operacji planu.
+	 */
 	public List<PrzesuwanieOperacja> getOperacje() {
-		return operacje;
+		return List.copyOf(operacje);
+	}
+
+	public boolean isPusty() {
+		return operacje.isEmpty();
 	}
 
 	/**
-	 * Generuje SQL w postaci instrukcji UPDATE z użyciem konstrukcji
-	 * {@code CASE WHEN}, opisującej wszystkie przesunięcia bloków.
+	 * Generuje SQL UPDATE z użyciem CASE WHEN.
 	 * <p>
-	 * Przykład:
-	 *
-	 * <pre>
-	 * UPDATE Dokumenty
-	 * SET lp = CASE
-	 *     WHEN lp BETWEEN 5 AND 7 THEN lp + 1
-	 *     WHEN lp BETWEEN 10 AND 12 THEN lp - 2
-	 *     ELSE lp
-	 * END
-	 * WHERE id_kategorii = 3;
-	 * </pre>
+	 * Jeśli plan jest pusty, zwracany jest pusty String zamiast niepoprawnego SQL-a
+	 * bez żadnej gałęzi WHEN.
+	 * <p>
+	 * Parametr {@code where} jest surowym fragmentem SQL i powinien pochodzić z
+	 * zaufanego źródła. Metoda nie wykonuje escapowania identyfikatorów ani warunku.
 	 */
 	public String toSqlCaseWhenBloki(String tabela, String kolumnaLp, String where) {
-		StringBuilder sb = new StringBuilder();
+		if (operacje.isEmpty()) {
+			return "";
+		}
 
+		wymagajNiepustejNazwy(tabela, "tabela");
+		wymagajNiepustejNazwy(kolumnaLp, "kolumnaLp");
+
+		StringBuilder sb = new StringBuilder();
 		sb.append("UPDATE ").append(tabela).append("\n");
 		sb.append("SET ").append(kolumnaLp).append(" = CASE\n");
 
 		for (PrzesuwanieOperacja op : operacje) {
-
 			sb.append("    WHEN ").append(kolumnaLp).append(" BETWEEN ").append(op.lpOd).append(" AND ").append(op.lpDo)
 					.append(" THEN ").append(kolumnaLp);
 
@@ -85,7 +73,6 @@ public class PrzesuwaniePlan {
 			} else {
 				sb.append(" - ").append(-op.offset);
 			}
-
 			sb.append("\n");
 		}
 
@@ -95,10 +82,14 @@ public class PrzesuwaniePlan {
 		if (where != null && !where.isBlank()) {
 			sb.append("\nWHERE ").append(where);
 		}
-
 		sb.append(";");
 
 		return sb.toString();
 	}
 
+	private static void wymagajNiepustejNazwy(String wartosc, String nazwaParametru) {
+		if (wartosc == null || wartosc.isBlank()) {
+			throw new IllegalArgumentException("Parametr '" + nazwaParametru + "' nie może być pusty.");
+		}
+	}
 }

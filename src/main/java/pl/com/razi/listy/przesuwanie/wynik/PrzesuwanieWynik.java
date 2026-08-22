@@ -63,7 +63,7 @@ public class PrzesuwanieWynik<T> {
 	}
 
 	public static <T> PrzesuwanieWynik<T> getInstancePusty(List<T> lista) {
-		return new PrzesuwanieWynik<T>(new ArrayList<>(lista), new PrzesuwaniePlan());
+		return new PrzesuwanieWynik<T>(lista == null ? new ArrayList<>() : new ArrayList<>(lista), new PrzesuwaniePlan());
 	}
 
 }
