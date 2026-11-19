@@ -13,7 +13,10 @@ import java.util.List;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
+import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga.TrybPrzesuwania;
 import pl.com.razi.listy.przesuwanie.model.PrzesuwanieIndeksyBlok;
 import pl.com.razi.listy.przesuwanie.wyjatki.PrzesuwanieBrakElementuException;
 
@@ -159,6 +162,53 @@ public class PrzesuwanieWejscieTest {
 		List<PrzesuwanieIndeksyBlok> bloki = PrzesuwanieWejscie.zbudujBlokiWybranych(null, null);
 
 		assertTrue(bloki.isEmpty());
+	}
+
+	@ParameterizedTest
+	@EnumSource(TrybPrzesuwania.class)
+	void przesunPelny_wybraneWOdwrotnejKolejnosci(TrybPrzesuwania tryb) throws Exception {
+		var obsluga = new PrzesuwanieObsluga.Builder<Integer>().trybPrzesuwania(tryb).build();
+		List<Integer> wszystkie = List.of(1, 2, 3, 4, 5, 6);
+
+		var wynik = obsluga.przesunPelny(wszystkie, List.of(5, 2), 1);
+		var plan = obsluga.przesunPelny(wszystkie, List.of(2, 5), 1).getPlan();
+
+		assertEquals(List.of(1, 3, 2, 4, 6, 5), wynik.getLista());
+		assertEquals(plan.toSqlCaseWhenBloki("t", "lp", null), wynik.getPlan().toSqlCaseWhenBloki("t", "lp", null));
+		assertEquals(obsluga.czyDoPrzesunieciaDojdzie(wszystkie, List.of(2, 6), 1),
+				obsluga.czyDoPrzesunieciaDojdzie(wszystkie, List.of(6, 2), 1));
+	}
+
+	@Test
+	void walidacjaDanych_brakDrugiegoWystapienia() {
+		var obsluga = new PrzesuwanieObsluga.Builder<Integer>().build();
+		List<Integer> wszystkie = List.of(1, 2, 3);
+		List<Integer> wybrane = List.of(2, 2);
+
+		assertThrows(PrzesuwanieBrakElementuException.class, () -> obsluga.przesunListe(wszystkie, wybrane, 1));
+		assertThrows(PrzesuwanieBrakElementuException.class, () -> obsluga.czyDoPrzesunieciaDojdzie(wszystkie, wybrane, 0));
+	}
+
+	@Test
+	void przesunListe_rowneElementyPierwszeWystapienia() throws Exception {
+		var obsluga = new PrzesuwanieObsluga.Builder<String>().build();
+		List<String> wszystkie = Arrays.asList("X", "A", null, "A", "B", "A", "C", "D");
+
+		assertEquals(Arrays.asList("X", null, "A", "B", "A", "A", "D", "C"),
+				obsluga.przesunListe(wszystkie, List.of("C", "A", "A"), 1));
+		assertEquals(Arrays.asList("X", "A", "A", null, "B", "A", "C", "D"),
+				obsluga.przesunListe(wszystkie, Arrays.asList((String) null), 1));
+	}
+
+	@Test
+	void przesunListe_wylaczonaNormalizacja() throws Exception {
+		var obsluga = new PrzesuwanieObsluga.Builder<Integer>().normalizujKolejnoscWybranych(false).build();
+		List<Integer> wszystkie = List.of(1, 2, 3, 4, 5, 6);
+
+		assertEquals(List.of(1, 3, 2, 4, 6, 5), obsluga.przesunListe(wszystkie, List.of(2, 5), 1));
+		assertThrows(IllegalArgumentException.class, () -> obsluga.przesunListe(wszystkie, List.of(5, 2), 1));
+		assertThrows(IllegalArgumentException.class, () -> obsluga.czyDoPrzesunieciaDojdzie(wszystkie, List.of(5, 2), 0));
+		assertThrows(PrzesuwanieBrakElementuException.class, () -> obsluga.przesunListe(wszystkie, List.of(2, 2), 1));
 	}
 
 }
