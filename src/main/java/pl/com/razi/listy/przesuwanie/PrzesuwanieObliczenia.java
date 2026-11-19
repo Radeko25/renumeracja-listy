@@ -34,7 +34,7 @@ class PrzesuwanieObliczenia {
 		GORA, DOL
 	}
 
-	private static Kierunek okreslKierunek(int przesuniecie) {
+	private static Kierunek okreslKierunek(long przesuniecie) {
 		return przesuniecie < 0 ? Kierunek.GORA : Kierunek.DOL;
 	}
 
@@ -45,7 +45,7 @@ class PrzesuwanieObliczenia {
 	 * Zakłada pełną poprawność danych wejściowych.
 	 */
 	public static <T> boolean czyDoPrzesunieciaDojdzie(final TrybPrzesuwania trybPrzesuwania,
-			final List<PrzesuwanieIndeksyBlok> blokiWybranych, final int rozmiarListy, final int przesuniecie) {
+			final List<PrzesuwanieIndeksyBlok> blokiWybranych, final int rozmiarListy, final long przesuniecie) {
 
 		if (blokiWybranych.isEmpty() || przesuniecie == 0) {
 			return false;
@@ -88,7 +88,7 @@ class PrzesuwanieObliczenia {
 	 * Zakłada pełną poprawność danych wejściowych.
 	 */
 	public static <T> PrzesuwanieWynik<T> wykonaj(final TrybPrzesuwania trybPrzesuwania, final List<T> wszystkie,
-			final List<PrzesuwanieIndeksyBlok> blokiWybranych, final int przesuniecie) {
+			final List<PrzesuwanieIndeksyBlok> blokiWybranych, final long przesuniecie) {
 
 		final int rozmiarListy = wszystkie.size();
 
@@ -115,15 +115,15 @@ class PrzesuwanieObliczenia {
 	 * Zakłada pełną poprawność danych wejściowych.
 	 */
 	static int[] obliczDocelowaPermutacje(final TrybPrzesuwania trybPrzesuwania,
-			final List<PrzesuwanieIndeksyBlok> blokiWybranych, final int rozmiarListy, final int przesuniecie) {
+			final List<PrzesuwanieIndeksyBlok> blokiWybranych, final int rozmiarListy, final long przesuniecie) {
 
 		final int[] docelowaPermutacja = new int[rozmiarListy];
 		final boolean[] zajeteLp = new boolean[rozmiarListy + 1];
 
 		final Kierunek kierunek = okreslKierunek(przesuniecie);
 
-		int limitGora = 1;
-		int limitDol = rozmiarListy;
+		long limitGora = 1;
+		long limitDol = rozmiarListy;
 
 		// -----------------------------------------------------
 		// 1. Przesuwanie bloków
@@ -139,7 +139,7 @@ class PrzesuwanieObliczenia {
 			PrzesuwanieIndeksyBlok blok = blokiWybranych.get(i);
 
 			final int dlugosc = blok.end - blok.start + 1;
-			int start = blok.start + przesuniecie;
+			long start = blok.start + przesuniecie;
 
 			switch (trybPrzesuwania) {
 
@@ -156,7 +156,7 @@ class PrzesuwanieObliczenia {
 					start = Math.max(start, limitGora);
 					limitGora = start + dlugosc;
 				} else {
-					int maxStart = limitDol - dlugosc + 1;
+					long maxStart = limitDol - dlugosc + 1;
 					start = Math.min(start, maxStart);
 					limitDol = start - 1;
 				}
@@ -168,13 +168,13 @@ class PrzesuwanieObliczenia {
 				throw new AssertionError(NIEOBSŁUGIWANY_TRYB_PRZESUWANIA + trybPrzesuwania);
 			}
 
-			int newLp = start;
+			long newLp = start;
 
 			for (int lp = blok.start; lp <= blok.end; lp++) {
 
 				final int destLp = (trybPrzesuwania == TrybPrzesuwania.CYKLICZNE)
 						? Math.floorMod(newLp - 1, rozmiarListy) + 1
-						: newLp;
+						: (int) newLp;
 
 				docelowaPermutacja[lp - 1] = destLp;
 				zajeteLp[destLp] = true;

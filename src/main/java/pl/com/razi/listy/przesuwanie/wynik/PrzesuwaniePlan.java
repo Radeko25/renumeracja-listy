@@ -56,6 +56,7 @@ public class PrzesuwaniePlan {
 	/**
 	 * Generuje SQL w postaci instrukcji UPDATE z użyciem konstrukcji
 	 * {@code CASE WHEN}, opisującej wszystkie przesunięcia bloków.
+	 * Dla pustego planu zwraca pusty tekst.
 	 * <p>
 	 * Przykład:
 	 *
@@ -70,6 +71,10 @@ public class PrzesuwaniePlan {
 	 * </pre>
 	 */
 	public String toSqlCaseWhenBloki(String tabela, String kolumnaLp, String where) {
+		if (operacje.isEmpty()) {
+			return "";
+		}
+
 		StringBuilder sb = new StringBuilder();
 
 		sb.append("UPDATE ").append(tabela).append("\n");
@@ -83,7 +88,7 @@ public class PrzesuwaniePlan {
 			if (op.offset > 0) {
 				sb.append(" + ").append(op.offset);
 			} else {
-				sb.append(" - ").append(-op.offset);
+				sb.append(" - ").append(-(long) op.offset);
 			}
 
 			sb.append("\n");

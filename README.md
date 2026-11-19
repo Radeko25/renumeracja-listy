@@ -24,6 +24,8 @@ Ciąg kolejnych wybranych pozycji, np. z [1, 2, 3, 7, 10, 11] powstają bloki:
 * *Cykliczny*: przeskakiwanie przez koniec listy jest dozwolone.
 * *Dociskający*: ruch trwa dopóki blok nie osiągnie granicy.
 
+Poprawiono obliczanie pozycji dla skrajnych przesunięć (`Integer.MIN_VALUE` i `Integer.MAX_VALUE`) we wszystkich trzech trybach.
+
 ## Kolejność zaznaczenia
 
 Poprawiono przesuwanie elementów zaznaczonych w innej kolejności, niż występują na liście. We wszystkich trzech trybach wybór `[C, B]` na liście `[A, B, C, D, E]` daje ten sam wynik i plan zmian co `[B, C]`. Jeśli na liście są równe elementy, domyślnie wybierane są ich pierwsze wystąpienia w liczbie podanej w zaznaczeniu.
@@ -66,7 +68,7 @@ lpOd = 2, lpDo = 3, offset = +1
 lpOd = 4, lpDo = 4, offset = -2
 ```
 
-Metoda `toSqlCaseWhenBloki` zapisuje oba zakresy w jednej instrukcji SQL.
+Metoda `toSqlCaseWhenBloki` zapisuje oba zakresy w jednej instrukcji SQL. Dla pustego planu, np. po zablokowanym przesunięciu, zwraca pusty tekst (`""`).
 
 ```sql
 UPDATE Dokumenty

@@ -124,7 +124,7 @@ class PrzesuwanieWejscie {
 	 * <li>wartość przesunięcia jest różna od zera.</li>
 	 * </ul>
 	 */
-	public static <T> boolean czyParametryPrzesuwaniaPoprawne(List<T> wszystkie, List<T> wybrane, int przesuniecie) {
+	public static <T> boolean czyParametryPrzesuwaniaPoprawne(List<T> wszystkie, List<T> wybrane, long przesuniecie) {
 		if (wszystkie == null || wszystkie.isEmpty()) {
 			return false;
 		}
@@ -144,7 +144,7 @@ class PrzesuwanieWejscie {
 	 * aby każdorazowo mieściło się w zakresie. W pozostałych trybach zwracana jest
 	 * wartość wejściowa bez zmian.
 	 */
-	public static int obliczRzeczywistePrzesuniecie(TrybPrzesuwania trybPrzesuwania, int przesuniecie,
+	public static long obliczRzeczywistePrzesuniecie(TrybPrzesuwania trybPrzesuwania, long przesuniecie,
 			int rozmiarListy) {
 		return trybPrzesuwania == TrybPrzesuwania.CYKLICZNE ? przesuniecie % rozmiarListy : przesuniecie;
 	}

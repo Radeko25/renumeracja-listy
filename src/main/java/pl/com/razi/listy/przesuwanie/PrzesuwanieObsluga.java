@@ -120,7 +120,7 @@ public class PrzesuwanieObsluga<T> {
 		}
 
 		int rozmiarListy = wszystkie.size();
-		int rzeczywistePrzesuniecie = PrzesuwanieWejscie.obliczRzeczywistePrzesuniecie(trybPrzesuwania, przesuniecie,
+		long rzeczywistePrzesuniecie = PrzesuwanieWejscie.obliczRzeczywistePrzesuniecie(trybPrzesuwania, przesuniecie,
 				rozmiarListy);
 
 		return PrzesuwanieObliczenia.czyDoPrzesunieciaDojdzie(trybPrzesuwania, blokiWybranych, rozmiarListy,
@@ -163,7 +163,7 @@ public class PrzesuwanieObsluga<T> {
 	 *                               na liście wszystkich.
 	 */
 	public List<T> przesunWGore(List<T> wszystkie, List<T> wybrane, int przesuniecie) throws PrzesuwanieBrakElementuException {
-		return przesunListe(wszystkie, wybrane, -przesuniecie);
+		return wykonajPrzesuniecie(wszystkie, wybrane, -(long) przesuniecie).getLista();
 	}
 
 	/**
@@ -211,6 +211,11 @@ public class PrzesuwanieObsluga<T> {
 	 */
 	public PrzesuwanieWynik<T> przesunPelny(List<T> wszystkie, List<T> wybrane, int przesuniecie)
 			throws PrzesuwanieBrakElementuException {
+		return wykonajPrzesuniecie(wszystkie, wybrane, przesuniecie);
+	}
+
+	private PrzesuwanieWynik<T> wykonajPrzesuniecie(List<T> wszystkie, List<T> wybrane, long przesuniecie)
+			throws PrzesuwanieBrakElementuException {
 
 		List<PrzesuwanieIndeksyBlok> blokiWybranych = PrzesuwanieWejscie.zbudujBlokiWybranych(wszystkie, wybrane,
 				normalizujKolejnoscWybranych);
@@ -220,7 +225,7 @@ public class PrzesuwanieObsluga<T> {
 		}
 
 		int rozmiarListy = wszystkie.size();
-		int rzeczywistePrzesuniecie = PrzesuwanieWejscie.obliczRzeczywistePrzesuniecie(trybPrzesuwania, przesuniecie,
+		long rzeczywistePrzesuniecie = PrzesuwanieWejscie.obliczRzeczywistePrzesuniecie(trybPrzesuwania, przesuniecie,
 				rozmiarListy);
 
 		return PrzesuwanieObliczenia.wykonaj(trybPrzesuwania, wszystkie, blokiWybranych, rzeczywistePrzesuniecie);
