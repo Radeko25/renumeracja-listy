@@ -1,10 +1,11 @@
 package pl.com.razi.listy.przesuwanie;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga.TrybPrzesuwania;
 import pl.com.razi.listy.przesuwanie.model.PrzesuwanieIndeksyBlok;
@@ -37,8 +38,8 @@ class PrzesuwanieWejscie {
 	 * Weryfikuje, czy wszystkie elementy wybrane występują na liście źródłowej.
 	 * <p>
 	 * Jeśli lista wybranych jest pusta lub null – walidacja przechodzi pozytywnie.
-	 * W przeciwnym wypadku metoda sprawdza, czy każdy element wybrany znajduje się
-	 * w liście źródłowej, jeśli nie – rzucany jest wyjątek.
+	 * W przeciwnym wypadku metoda sprawdza, czy każdy element wybrany występuje
+	 * na liście źródłowej w wymaganej liczbie. Jeśli nie – rzucany jest wyjątek.
 	 */
 	public static <T> void walidacjaDanych(List<T> wszystkie, List<T> wybrane) throws PrzesuwanieBrakElementuException {
 
@@ -50,13 +51,66 @@ class PrzesuwanieWejscie {
 			throw new PrzesuwanieBrakElementuException();
 		}
 
-		Set<T> zbior = new HashSet<>(wszystkie);
+		pozycjeWybranych(wszystkie, wybrane);
+	}
 
+	/**
+	 * Odtwarza pozycje zaznaczenia w kolejności listy źródłowej. Dla równych
+	 * elementów wybiera pierwsze wystąpienia w liczbie podanej w zaznaczeniu.
+	 */
+	private static <T> int[] pozycjeWybranych(List<T> wszystkie, List<T> wybrane)
+			throws PrzesuwanieBrakElementuException {
+		Map<T, Integer> pozostale = new HashMap<>();
 		for (T element : wybrane) {
-			if (!zbior.contains(element)) {
-				throw new PrzesuwanieBrakElementuException();
+			pozostale.merge(element, 1, Integer::sum);
+		}
+
+		int[] pozycje = new int[wybrane.size()];
+		int znalezione = 0;
+		int lp = 0;
+		for (T element : wszystkie) {
+			lp++;
+			Integer ile = pozostale.get(element);
+			if (ile == null) {
+				continue;
+			}
+			pozycje[znalezione++] = lp;
+			if (znalezione == pozycje.length) {
+				return pozycje;
+			}
+			if (ile == 1) {
+				pozostale.remove(element);
+			} else {
+				pozostale.put(element, ile - 1);
 			}
 		}
+		throw new PrzesuwanieBrakElementuException();
+	}
+
+	/**
+	 * Odczytuje pozycje uporządkowanego zaznaczenia w jednym przejściu.
+	 */
+	private static <T> int[] pozycjeWybranychWKolejnosciListy(List<T> wszystkie, List<T> wybrane)
+			throws PrzesuwanieBrakElementuException {
+		int[] pozycje = new int[wybrane.size()];
+		int znalezione = 0;
+		Iterator<T> zaznaczenie = wybrane.iterator();
+		T szukany = zaznaczenie.next();
+		int lp = 0;
+		for (T element : wszystkie) {
+			lp++;
+			if (Objects.equals(element, szukany)) {
+				pozycje[znalezione++] = lp;
+				if (!zaznaczenie.hasNext()) {
+					return pozycje;
+				}
+				szukany = zaznaczenie.next();
+			}
+		}
+
+		// Przy niepełnym dopasowaniu rozróżniamy brak wystąpienia od błędnej kolejności.
+		walidacjaDanych(wszystkie, wybrane);
+		throw new IllegalArgumentException("Wybrane elementy muszą być w kolejności listy źródłowej.");
 	}
 
 	/**
@@ -108,48 +162,44 @@ class PrzesuwanieWejscie {
 	 * walidację.
 	 */
 	public static <T> List<PrzesuwanieIndeksyBlok> zbudujBlokiWybranych(List<T> wszystkie, List<T> wybrane) {
+		if (wszystkie == null || wszystkie.isEmpty()) {
+			return new ArrayList<>();
+		}
+		try {
+			return zbudujBlokiWybranych(wszystkie, wybrane, true);
+		} catch (PrzesuwanieBrakElementuException e) {
+			throw new IllegalArgumentException(e.getMessage(), e);
+		}
+	}
+
+	/**
+	 * Buduje ciągłe bloki zaznaczenia. Domyślnie kolejność elementów wybranych
+	 * jest odtwarzana na podstawie listy źródłowej.
+	 */
+	public static <T> List<PrzesuwanieIndeksyBlok> zbudujBlokiWybranych(List<T> wszystkie, List<T> wybrane,
+			boolean normalizujKolejnoscWybranych) throws PrzesuwanieBrakElementuException {
 
 		List<PrzesuwanieIndeksyBlok> bloki = new ArrayList<>();
-
-		if (wszystkie == null || wybrane == null || wszystkie.isEmpty() || wybrane.isEmpty()) {
+		if (wybrane == null || wybrane.isEmpty()) {
 			return bloki;
 		}
-
-		int startWyszukiwania = 0;
-
-		int startBloku = -1;
-		int poprzedni = -1;
-
-		for (T elem : wybrane) {
-
-			int idx = -1;
-			for (int i = startWyszukiwania; i < wszystkie.size(); i++) {
-				if (Objects.equals(wszystkie.get(i), elem)) {
-					idx = i;
-					startWyszukiwania = i + 1;
-					break;
-				}
-			}
-
-			int lp = idx + 1;
-
-			if (startBloku == -1) {
-				startBloku = lp;
-				poprzedni = lp;
-				continue;
-			}
-
-			if (lp == poprzedni + 1) {
-				poprzedni = lp;
-				continue;
-			}
-
-			bloki.add(new PrzesuwanieIndeksyBlok(startBloku, poprzedni));
-			startBloku = poprzedni = lp;
+		if (wszystkie == null) {
+			throw new PrzesuwanieBrakElementuException();
 		}
 
+		int[] pozycje = normalizujKolejnoscWybranych ? pozycjeWybranych(wszystkie, wybrane)
+				: pozycjeWybranychWKolejnosciListy(wszystkie, wybrane);
+		int startBloku = pozycje[0];
+		int poprzedni = startBloku;
+		for (int i = 1; i < pozycje.length; i++) {
+			int lp = pozycje[i];
+			if (lp != poprzedni + 1) {
+				bloki.add(new PrzesuwanieIndeksyBlok(startBloku, poprzedni));
+				startBloku = lp;
+			}
+			poprzedni = lp;
+		}
 		bloki.add(new PrzesuwanieIndeksyBlok(startBloku, poprzedni));
-
 		return bloki;
 	}
 

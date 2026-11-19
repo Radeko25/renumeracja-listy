@@ -10,7 +10,8 @@ import pl.com.razi.listy.przesuwanie.wynik.PrzesuwanieWynik;
  * Klasa udostępniająca wysokopoziomowe operacje przesuwania elementów listy.
  * <p>
  * Przesunięcie działa wyłącznie na podstawie porządku elementów na liście
- * (indeksów), bez wymogu posiadania pól przechowujących pozycje.
+ * (indeksów), bez wymogu posiadania pól przechowujących pozycje. Domyślnie
+ * elementy wybrane można przekazać w dowolnej kolejności.
  * </p>
  *
  * <h3>Tryby przesuwania</h3>
@@ -29,7 +30,9 @@ import pl.com.razi.listy.przesuwanie.wynik.PrzesuwanieWynik;
  * <h3>Wyjątki</h3> Wszystkie metody mogą rzucać:
  * <ul>
  * <li>{@link PrzesuwanieBrakElementuException} – gdy którykolwiek element z listy
- * wybranych nie istnieje w liście wszystkich.</li>
+ * wybranych nie występuje na liście wszystkich w wymaganej liczbie.</li>
+ * <li>{@link IllegalArgumentException} – gdy wyłączono normalizację, a wybrane
+ * elementy podano w kolejności niezgodnej z listą źródłową.</li>
  * </ul>
  *
  * @param <T> typ elementów listy
@@ -41,9 +44,11 @@ public class PrzesuwanieObsluga<T> {
 	}
 
 	private TrybPrzesuwania trybPrzesuwania;
+	private final boolean normalizujKolejnoscWybranych;
 
-	private PrzesuwanieObsluga(TrybPrzesuwania trybPrzesuwania) {
+	private PrzesuwanieObsluga(TrybPrzesuwania trybPrzesuwania, boolean normalizujKolejnoscWybranych) {
 		this.trybPrzesuwania = trybPrzesuwania;
+		this.normalizujKolejnoscWybranych = normalizujKolejnoscWybranych;
 	}
 
 	// ====================================================================
@@ -53,14 +58,25 @@ public class PrzesuwanieObsluga<T> {
 	public static class Builder<T> {
 
 		private TrybPrzesuwania trybPrzesuwania = TrybPrzesuwania.LINIOWE;
+		private boolean normalizujKolejnoscWybranych = true;
 
 		public Builder<T> trybPrzesuwania(TrybPrzesuwania trybPrzesuwania) {
 			this.trybPrzesuwania = trybPrzesuwania;
 			return this;
 		}
 
+		/**
+		 * Domyślnie biblioteka odtwarza kolejność zaznaczenia według listy źródłowej.
+		 * Wartość {@code false} wymaga przekazania elementów w kolejności ich
+		 * występowania, np. według numerów wierszy w tabeli.
+		 */
+		public Builder<T> normalizujKolejnoscWybranych(boolean normalizujKolejnoscWybranych) {
+			this.normalizujKolejnoscWybranych = normalizujKolejnoscWybranych;
+			return this;
+		}
+
 		public PrzesuwanieObsluga<T> build() {
-			return new PrzesuwanieObsluga<>(trybPrzesuwania);
+			return new PrzesuwanieObsluga<>(trybPrzesuwania, normalizujKolejnoscWybranych);
 		}
 
 	}
@@ -96,13 +112,12 @@ public class PrzesuwanieObsluga<T> {
 	public boolean czyDoPrzesunieciaDojdzie(List<T> wszystkie, List<T> wybrane, int przesuniecie)
 			throws PrzesuwanieBrakElementuException {
 
-		PrzesuwanieWejscie.walidacjaDanych(wszystkie, wybrane);
+		List<PrzesuwanieIndeksyBlok> blokiWybranych = PrzesuwanieWejscie.zbudujBlokiWybranych(wszystkie, wybrane,
+				normalizujKolejnoscWybranych);
 
 		if (!PrzesuwanieWejscie.czyParametryPrzesuwaniaPoprawne(wszystkie, wybrane, przesuniecie)) {
 			return false;
 		}
-
-		List<PrzesuwanieIndeksyBlok> blokiWybranych = PrzesuwanieWejscie.zbudujBlokiWybranych(wszystkie, wybrane);
 
 		int rozmiarListy = wszystkie.size();
 		int rzeczywistePrzesuniecie = PrzesuwanieWejscie.obliczRzeczywistePrzesuniecie(trybPrzesuwania, przesuniecie,
@@ -197,13 +212,12 @@ public class PrzesuwanieObsluga<T> {
 	public PrzesuwanieWynik<T> przesunPelny(List<T> wszystkie, List<T> wybrane, int przesuniecie)
 			throws PrzesuwanieBrakElementuException {
 
-		PrzesuwanieWejscie.walidacjaDanych(wszystkie, wybrane);
+		List<PrzesuwanieIndeksyBlok> blokiWybranych = PrzesuwanieWejscie.zbudujBlokiWybranych(wszystkie, wybrane,
+				normalizujKolejnoscWybranych);
 
 		if (!PrzesuwanieWejscie.czyParametryPrzesuwaniaPoprawne(wszystkie, wybrane, przesuniecie)) {
 			return PrzesuwanieWynik.getInstancePusty(wszystkie);
 		}
-
-		List<PrzesuwanieIndeksyBlok> blokiWybranych = PrzesuwanieWejscie.zbudujBlokiWybranych(wszystkie, wybrane);
 
 		int rozmiarListy = wszystkie.size();
 		int rzeczywistePrzesuniecie = PrzesuwanieWejscie.obliczRzeczywistePrzesuniecie(trybPrzesuwania, przesuniecie,
