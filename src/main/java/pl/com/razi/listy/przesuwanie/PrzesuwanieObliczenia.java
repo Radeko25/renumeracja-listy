@@ -2,13 +2,11 @@ package pl.com.razi.listy.przesuwanie;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 
 import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga.TrybPrzesuwania;
 import pl.com.razi.listy.przesuwanie.model.PrzesuwanieIndeksyBlok;
 import pl.com.razi.listy.przesuwanie.wynik.PrzesuwaniePlan;
-import pl.com.razi.listy.przesuwanie.wynik.PrzesuwanieWynik;
 
 /**
  * Zestaw niskopoziomowych obliczeń wykonywanych podczas przesuwania bloków
@@ -79,30 +77,6 @@ class PrzesuwanieObliczenia {
 		default:
 			throw new AssertionError(NIEOBSŁUGIWANY_TRYB_PRZESUWANIA + trybPrzesuwania);
 		}
-	}
-
-	/**
-	 * Wykonuje pełną operację przesunięcia bloków elementów zgodnie z zadanym
-	 * trybem oraz zwraca zarówno finalną listę, jak i plan przesunięć.
-	 * <p>
-	 * Zakłada pełną poprawność danych wejściowych.
-	 */
-	public static <T> PrzesuwanieWynik<T> wykonaj(final TrybPrzesuwania trybPrzesuwania, final List<T> wszystkie,
-			final List<PrzesuwanieIndeksyBlok> blokiWybranych, final long przesuniecie) {
-
-		final int rozmiarListy = wszystkie.size();
-
-		if (!czyDoPrzesunieciaDojdzie(trybPrzesuwania, blokiWybranych, rozmiarListy, przesuniecie)) {
-			return PrzesuwanieWynik.getInstancePusty(wszystkie);
-		}
-
-		final int[] docelowaPermutacja = obliczDocelowaPermutacje(trybPrzesuwania, blokiWybranych, rozmiarListy,
-				przesuniecie);
-
-		final PrzesuwaniePlan plan = generujPlan(docelowaPermutacja, rozmiarListy);
-		final List<T> wynikowaLista = przebudujListe(docelowaPermutacja, wszystkie);
-
-		return new PrzesuwanieWynik<>(wynikowaLista, plan);
 	}
 
 	/**
@@ -211,55 +185,26 @@ class PrzesuwanieObliczenia {
 	 * aktualizację danych np. w bazie SQL.
 	 */
 	static PrzesuwaniePlan generujPlan(final int[] docelowaPermutacja, final int rozmiarListy) {
+		return generujPlan(docelowaPermutacja, rozmiarListy, null);
+	}
 
-		class Move {
-			final int oldLp;
-			final int offset;
-
-			private Move(int oldLp, int offset) {
-				this.oldLp = oldLp;
-				this.offset = offset;
+	static PrzesuwaniePlan generujPlan(int[] permutacja, int rozmiarListy, int[] widoczneLp) {
+		PrzesuwaniePlan plan = new PrzesuwaniePlan();
+		int poczatek = 1;
+		int poprzednieLp = 0;
+		int offset = 0;
+		for (int i = 0; i < rozmiarListy; i++) {
+			int stareLp = widoczneLp == null ? i + 1 : widoczneLp[i];
+			int noweLp = widoczneLp == null ? permutacja[i] : widoczneLp[permutacja[i] - 1];
+			int nowyOffset = noweLp - stareLp;
+			if (nowyOffset != offset || stareLp - poprzednieLp != 1) {
+				plan.dodaj(poczatek, poprzednieLp, offset);
+				poczatek = stareLp;
+				offset = nowyOffset;
 			}
+			poprzednieLp = stareLp;
 		}
-
-		final PrzesuwaniePlan plan = new PrzesuwaniePlan();
-		final List<Move> lista = new ArrayList<>();
-
-		for (int oldLp = 1; oldLp <= rozmiarListy; oldLp++) {
-
-			final int newLp = docelowaPermutacja[oldLp - 1];
-			final int offset = newLp - oldLp;
-
-			if (offset != 0) {
-				final Move mv = new Move(oldLp, offset);
-				lista.add(mv);
-			}
-		}
-
-		if (lista.isEmpty()) {
-			return plan;
-		}
-
-		lista.sort(Comparator.comparingInt(a -> a.oldLp));
-
-		int start = lista.get(0).oldLp;
-		int prev = start;
-		int offset = lista.get(0).offset;
-
-		for (int i = 1; i < lista.size(); i++) {
-			final Move mv = lista.get(i);
-
-			if (mv.oldLp == prev + 1 && mv.offset == offset) {
-				prev = mv.oldLp;
-			} else {
-				plan.dodaj(start, prev, offset);
-				start = prev = mv.oldLp;
-				offset = mv.offset;
-			}
-		}
-
-		plan.dodaj(start, prev, offset);
-
+		plan.dodaj(poczatek, poprzednieLp, offset);
 		return plan;
 	}
 
@@ -272,11 +217,11 @@ class PrzesuwanieObliczenia {
 	static <T> List<T> przebudujListe(final int[] docelowaPermutacja, final List<T> wszystkie) {
 
 		final int rozmiarListy = wszystkie.size();
-		final List<T> wynik = new ArrayList<>(Collections.nCopies(rozmiarListy, (T) null));
-
-		for (int i = 0; i < rozmiarListy; i++) {
-			int destIndex = docelowaPermutacja[i] - 1;
-			wynik.set(destIndex, wszystkie.get(i));
+		final List<T> wynik = new ArrayList<>(Collections.nCopies(rozmiarListy, null));
+		int i = 0;
+		for (T element : wszystkie) {
+			int destIndex = docelowaPermutacja[i++] - 1;
+			wynik.set(destIndex, element);
 		}
 
 		return wynik;

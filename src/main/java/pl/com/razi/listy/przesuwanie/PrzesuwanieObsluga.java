@@ -1,9 +1,13 @@
 package pl.com.razi.listy.przesuwanie;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.ToIntFunction;
 
 import pl.com.razi.listy.przesuwanie.model.PrzesuwanieIndeksyBlok;
 import pl.com.razi.listy.przesuwanie.wyjatki.PrzesuwanieBrakElementuException;
+import pl.com.razi.listy.przesuwanie.wynik.PrzesuwaniePlan;
 import pl.com.razi.listy.przesuwanie.wynik.PrzesuwanieWynik;
 
 /**
@@ -163,7 +167,7 @@ public class PrzesuwanieObsluga<T> {
 	 *                               na liście wszystkich.
 	 */
 	public List<T> przesunWGore(List<T> wszystkie, List<T> wybrane, int przesuniecie) throws PrzesuwanieBrakElementuException {
-		return wykonajPrzesuniecie(wszystkie, wybrane, -(long) przesuniecie).getLista();
+		return przesunSamaListe(wszystkie, wybrane, -(long) przesuniecie);
 	}
 
 	/**
@@ -191,7 +195,14 @@ public class PrzesuwanieObsluga<T> {
 	 *                               na liście wszystkich.
 	 */
 	public List<T> przesunListe(List<T> wszystkie, List<T> wybrane, int przesuniecie) throws PrzesuwanieBrakElementuException {
-		return przesunPelny(wszystkie, wybrane, przesuniecie).getLista();
+		return przesunSamaListe(wszystkie, wybrane, przesuniecie);
+	}
+
+	private List<T> przesunSamaListe(List<T> wszystkie, List<T> wybrane, long przesuniecie)
+			throws PrzesuwanieBrakElementuException {
+		List<T> zrodlo = Objects.requireNonNullElse(wszystkie, List.of());
+		int[] permutacja = przygotujPermutacje(zrodlo, wybrane, przesuniecie);
+		return permutacja.length == 0 ? new ArrayList<>(zrodlo) : PrzesuwanieObliczenia.przebudujListe(permutacja, zrodlo);
 	}
 
 	/**
@@ -211,24 +222,48 @@ public class PrzesuwanieObsluga<T> {
 	 */
 	public PrzesuwanieWynik<T> przesunPelny(List<T> wszystkie, List<T> wybrane, int przesuniecie)
 			throws PrzesuwanieBrakElementuException {
-		return wykonajPrzesuniecie(wszystkie, wybrane, przesuniecie);
+		return przesunPelny(wszystkie, wybrane, przesuniecie, null);
 	}
 
-	private PrzesuwanieWynik<T> wykonajPrzesuniecie(List<T> wszystkie, List<T> wybrane, long przesuniecie)
+	/**
+	 * Przesuwa rekordy między pozycjami widocznymi na liście. Odczytane LP muszą
+	 * być dodatnie i ściśle rosnące. Pozostałe pozycje są pomijane w planie.
+	 * Przy braku funkcji odczytu obowiązuje numeracja od 1 do rozmiaru listy.
+	 */
+	public PrzesuwanieWynik<T> przesunPelny(List<T> wszystkie, List<T> wybrane, int przesuniecie,
+			ToIntFunction<? super T> odczytajLp) throws PrzesuwanieBrakElementuException {
+		List<T> zrodlo = Objects.requireNonNullElse(wszystkie, List.of());
+		int[] permutacja = przygotujPermutacje(zrodlo, wybrane, przesuniecie);
+		int[] widoczneLp = null;
+		if (odczytajLp != null) {
+			widoczneLp = zrodlo.stream().mapToInt(odczytajLp).toArray();
+		}
+		List<T> lista = permutacja.length == 0 ? zrodlo : PrzesuwanieObliczenia.przebudujListe(permutacja, zrodlo);
+		PrzesuwaniePlan plan = PrzesuwanieObliczenia.generujPlan(permutacja, permutacja.length, widoczneLp);
+		return new PrzesuwanieWynik<>(lista, plan, widoczneLp);
+	}
+
+	/** Pusta tablica oznacza brak ruchu, także dla niepustej listy źródłowej. */
+	private int[] przygotujPermutacje(List<T> wszystkie, List<T> wybrane, long przesuniecie)
 			throws PrzesuwanieBrakElementuException {
 
 		List<PrzesuwanieIndeksyBlok> blokiWybranych = PrzesuwanieWejscie.zbudujBlokiWybranych(wszystkie, wybrane,
 				normalizujKolejnoscWybranych);
 
 		if (!PrzesuwanieWejscie.czyParametryPrzesuwaniaPoprawne(wszystkie, wybrane, przesuniecie)) {
-			return PrzesuwanieWynik.getInstancePusty(wszystkie);
+			return new int[0];
 		}
 
 		int rozmiarListy = wszystkie.size();
 		long rzeczywistePrzesuniecie = PrzesuwanieWejscie.obliczRzeczywistePrzesuniecie(trybPrzesuwania, przesuniecie,
 				rozmiarListy);
 
-		return PrzesuwanieObliczenia.wykonaj(trybPrzesuwania, wszystkie, blokiWybranych, rzeczywistePrzesuniecie);
+		if (!PrzesuwanieObliczenia.czyDoPrzesunieciaDojdzie(trybPrzesuwania, blokiWybranych, rozmiarListy,
+				rzeczywistePrzesuniecie)) {
+			return new int[0];
+		}
+		return PrzesuwanieObliczenia.obliczDocelowaPermutacje(trybPrzesuwania, blokiWybranych, rozmiarListy,
+				rzeczywistePrzesuniecie);
 	}
 
 }

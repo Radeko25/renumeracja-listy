@@ -1,0 +1,173 @@
+package pl.com.razi.listy.przesuwanie;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+
+import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga.TrybPrzesuwania;
+import pl.com.razi.listy.przesuwanie.wynik.PrzesuwaniePlan;
+import pl.com.razi.listy.przesuwanie.wynik.PrzesuwaniePlan.DialektSql;
+
+/** Profil Maven testy-baz uruchamia te same operacje na czterech silnikach. */
+class PrzesuwanieSqlIT {
+	private record Wiersz(int id, int lp) {}
+
+	@ParameterizedTest(name = "{0} – pełna lista, widok, UNIQUE i wycofanie transakcji")
+	@EnumSource(DialektSql.class)
+	void zapisujeTylkoPrzesunieteRekordy(DialektSql dialekt) throws Exception {
+		String tabela = "rn_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+		try (var baza = polacz(dialekt); var ddl = baza.createStatement()) {
+			System.out.println(dialekt + " | " + baza.getMetaData().getDatabaseProductVersion());
+			ddl.executeUpdate("CREATE TABLE " + tabela + " (id INTEGER PRIMARY KEY, grupa INTEGER NOT NULL,"
+					+ " lp INTEGER NOT NULL, widoczny INTEGER NOT NULL, UNIQUE (grupa, lp), CHECK (id <> 1 OR lp <> 2))");
+			try {
+				try (var insert = baza.prepareStatement("INSERT INTO " + tabela + " VALUES (?, ?, ?, ?)")) {
+					for (int grupa : List.of(3, 9)) {
+						for (int lp = 1; lp <= 5; lp++) {
+							insert.setInt(1, grupa == 3 ? lp : lp + 10);
+							insert.setInt(2, grupa);
+							insert.setInt(3, lp);
+							insert.setInt(4, lp % 2);
+							insert.executeUpdate();
+						}
+					}
+				}
+				baza.setAutoCommit(false);
+				var pelna = odczytaj(baza, tabela, 3, false);
+				var widok = odczytaj(baza, tabela, 3, true);
+				var obcaGrupa = odczytaj(baza, tabela, 9, false);
+				var api = new PrzesuwanieObsluga.Builder<Wiersz>().build();
+
+				var plan = api.przesunPelny(pelna, pelna.subList(1, 3), 1).getPlan();
+				sprawdzRuch(baza, dialekt, tabela, plan, List.of(1, 4, 2, 3, 5), 3, obcaGrupa);
+
+				plan = api.przesunPelny(widok, List.of(widok.get(2)), -1, Wiersz::lp).getPlan();
+				sprawdzRuch(baza, dialekt, tabela, plan, List.of(1, 2, 5, 4, 3), 2, obcaGrupa);
+
+				api.ustawTrybPrzesuwania(TrybPrzesuwania.DOCISKAJACE);
+				plan = api.przesunPelny(widok, List.of(widok.get(0), widok.get(2)), 20, Wiersz::lp).getPlan();
+				sprawdzRuch(baza, dialekt, tabela, plan, List.of(3, 2, 1, 4, 5), 2, obcaGrupa);
+
+				api.ustawTrybPrzesuwania(TrybPrzesuwania.CYKLICZNE);
+				plan = api.przesunPelny(widok, List.of(widok.get(2)), 1, Wiersz::lp).getPlan();
+				sprawdzRuch(baza, dialekt, tabela, plan, List.of(5, 2, 1, 4, 3), 3, obcaGrupa);
+
+				var pusty = api.przesunPelny(widok, widok, 0, Wiersz::lp).getPlan();
+				assertEquals(List.of(), pusty.toSql(dialekt, tabela, "lp", "grupa = ?"));
+
+				// CHECK odrzuci dopiero docelową zmianę rekordu 1 na LP 2.
+				var odrzucony = api.przesunPelny(pelna, List.of(pelna.get(0)), 1).getPlan();
+				var polecenia = odrzucony.toSql(dialekt, tabela, "lp", "grupa = ?");
+				for (int i = 0; i < polecenia.size() - 1; i++) {
+					assertEquals(2, wykonaj(baza, polecenia.get(i), 3));
+				}
+				assertThrows(SQLException.class, () -> wykonaj(baza, polecenia.get(polecenia.size() - 1), 3));
+				baza.rollback();
+				assertEquals(pelna, odczytaj(baza, tabela, 3, false));
+				assertEquals(obcaGrupa, odczytaj(baza, tabela, 9, false));
+			} finally {
+				if (!baza.getAutoCommit()) {
+					baza.rollback();
+					baza.setAutoCommit(true);
+				}
+				ddl.executeUpdate("DROP TABLE " + tabela);
+			}
+		}
+	}
+
+	@Test
+	void sqlitePrzesuwaPonadTysiacRozdzielonychPozycji() throws Exception {
+		try (var baza = polacz(DialektSql.SQLITE); var polecenie = baza.createStatement()) {
+			baza.setAutoCommit(false);
+			polecenie.executeUpdate("CREATE TABLE lista (id INTEGER PRIMARY KEY, grupa INTEGER, lp INTEGER UNIQUE, widoczny INTEGER)");
+			polecenie.executeUpdate("WITH RECURSIVE numery(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numery WHERE n < 2200)"
+					+ " INSERT INTO lista SELECT n, 1, n, n % 2 FROM numery");
+			var widoczne = odczytaj(baza, "lista", 1, true);
+			var oczekiwane = odczytaj(baza, "lista", 1, false);
+			var api = new PrzesuwanieObsluga.Builder<Wiersz>().trybPrzesuwania(TrybPrzesuwania.CYKLICZNE).build();
+			var ostatni = widoczne.get(widoczne.size() - 1);
+			var plan = api.przesunPelny(widoczne, List.of(ostatni), 1, Wiersz::lp).getPlan();
+			for (String sql : plan.toSql(DialektSql.SQLITE, "lista", "lp", "grupa = ?")) {
+				assertEquals(widoczne.size(), wykonaj(baza, sql, 1));
+			}
+			// Ostatni widoczny wraca na początek, a każdy kolejny zajmuje następne widoczne LP.
+			var poprzedni = ostatni;
+			for (Wiersz miejsce : widoczne) {
+				oczekiwane.set(miejsce.lp() - 1, new Wiersz(poprzedni.id(), miejsce.lp()));
+				poprzedni = miejsce;
+			}
+			assertEquals(oczekiwane, odczytaj(baza, "lista", 1, false));
+			baza.rollback();
+		}
+	}
+
+	private void sprawdzRuch(Connection baza, DialektSql dialekt, String tabela, PrzesuwaniePlan plan,
+			List<Integer> ids, int liczbaZmienionych, List<Wiersz> obcaGrupa) throws SQLException {
+		var sql = plan.toSql(dialekt, tabela, "lp", "grupa = ? OR grupa = ?");
+		int liczbaInstrukcji = switch (dialekt) {
+		case POSTGRESQL, SQLITE -> 2;
+		case ORACLE, SQL_SERVER -> 1;
+		};
+		assertEquals(liczbaInstrukcji, sql.size());
+		for (String polecenie : sql) {
+			assertEquals(liczbaZmienionych, wykonaj(baza, polecenie, 3, 99));
+		}
+		var oczekiwane = new ArrayList<Wiersz>();
+		for (int i = 0; i < ids.size(); i++) {
+			oczekiwane.add(new Wiersz(ids.get(i), i + 1));
+		}
+		assertEquals(oczekiwane, odczytaj(baza, tabela, 3, false));
+		assertEquals(obcaGrupa, odczytaj(baza, tabela, 9, false));
+		baza.rollback();
+	}
+
+	private int wykonaj(Connection baza, String sql, int... parametry) throws SQLException {
+		try (var zapytanie = baza.prepareStatement(sql)) {
+			for (int i = 0; i < parametry.length; i++) {
+				zapytanie.setInt(i + 1, parametry[i]);
+			}
+			return zapytanie.executeUpdate();
+		}
+	}
+
+	private List<Wiersz> odczytaj(Connection baza, String tabela, int grupa, boolean tylkoWidoczne) throws SQLException {
+		String sql = "SELECT id, lp FROM " + tabela + " WHERE grupa = ?" + (tylkoWidoczne ? " AND widoczny = 1" : "")
+				+ " ORDER BY lp";
+		try (var zapytanie = baza.prepareStatement(sql)) {
+			zapytanie.setInt(1, grupa);
+			try (var dane = zapytanie.executeQuery()) {
+				var lista = new ArrayList<Wiersz>();
+				while (dane.next()) {
+					lista.add(new Wiersz(dane.getInt(1), dane.getInt(2)));
+				}
+				return lista;
+			}
+		}
+	}
+
+	private Connection polacz(DialektSql dialekt) throws SQLException {
+		if (dialekt == DialektSql.SQLITE) {
+			return DriverManager.getConnection("jdbc:sqlite::memory:");
+		}
+		String prefix = "RENUM_" + dialekt.name() + "_";
+		return DriverManager.getConnection(wymagana(prefix + "URL"), wymagana(prefix + "USER"), wymagana(prefix + "PASSWORD"));
+	}
+
+	private String wymagana(String nazwa) {
+		String wartosc = System.getenv(nazwa);
+		if (wartosc == null || wartosc.isBlank()) {
+			throw new IllegalStateException("Ustaw zmienną testową " + nazwa);
+		}
+		return wartosc;
+	}
+}

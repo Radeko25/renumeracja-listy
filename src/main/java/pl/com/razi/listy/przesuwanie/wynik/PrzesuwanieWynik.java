@@ -1,6 +1,7 @@
 package pl.com.razi.listy.przesuwanie.wynik;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.ObjIntConsumer;
 
@@ -14,33 +15,59 @@ import java.util.function.ObjIntConsumer;
  * bazy danych).</li>
  * </ul>
  * <p>
- * Klasa jest niemutowalna — przechowuje finalne wyniki operacji przesuwania.
+ * Lista i plan są migawką kolejności. Obiekty na liście zachowują swoją
+ * tożsamość i mogą otrzymać numery przez {@link #ustawLp(ObjIntConsumer)}.
  */
 public class PrzesuwanieWynik<T> {
 
-    private final List<T> lista;
-    private final PrzesuwaniePlan plan;
+	private final List<T> lista;
+	private final PrzesuwaniePlan plan;
+	private final int[] widoczneLp;
 
-    public PrzesuwanieWynik(List<T> lista, PrzesuwaniePlan plan) {
-        this.lista = lista;
-        this.plan = plan;
-    }
+	public PrzesuwanieWynik(List<T> lista, PrzesuwaniePlan plan) {
+		this(lista, plan, null);
+	}
 
-    public List<T> getLista() {
-        return lista;
-    }
+	public PrzesuwanieWynik(List<T> lista, PrzesuwaniePlan plan, int[] widoczneLp) {
+		this.widoczneLp = widoczneLp == null ? null : widoczneLp.clone();
+		if (this.widoczneLp != null) {
+			if (this.widoczneLp.length != lista.size()) {
+				throw new IllegalArgumentException("Każdy widoczny rekord musi mieć własne LP.");
+			}
+			int poprzednie = 0;
+			for (int lp : this.widoczneLp) {
+				if (lp <= poprzednie) {
+					throw new IllegalArgumentException("Widoczne LP muszą być dodatnie i ściśle rosnące.");
+				}
+				poprzednie = lp;
+			}
+		}
+		this.lista = Collections.unmodifiableList(new ArrayList<>(lista));
+		this.plan = plan.kopiaDoOdczytu();
+	}
 
-    public PrzesuwaniePlan getPlan() {
-        return plan;
-    }
+	public List<T> getLista() {
+		return lista;
+	}
+
+	public PrzesuwaniePlan getPlan() {
+		return plan;
+	}
 
 	/**
-	 * Ustawia numery porządkowe (LP) zaczynając od 1.
+	 * Przypisuje wynikowym elementom oryginalne widoczne LP. Przy zwykłym
+	 * przesunięciu pełnej listy numeruje od 1.
 	 * <p>
 	 * Patrz: {@link #ustawLp(int, ObjIntConsumer)}.
 	 */
 	public void ustawLp(ObjIntConsumer<T> setter) {
-		ustawLp(1, setter);
+		if (widoczneLp == null) {
+			ustawLp(1, setter);
+			return;
+		}
+		for (int i = 0; i < widoczneLp.length; i++) {
+			setter.accept(lista.get(i), widoczneLp[i]);
+		}
 	}
 
 	/**
@@ -63,7 +90,7 @@ public class PrzesuwanieWynik<T> {
 	}
 
 	public static <T> PrzesuwanieWynik<T> getInstancePusty(List<T> lista) {
-		return new PrzesuwanieWynik<T>(new ArrayList<>(lista), new PrzesuwaniePlan());
+		return new PrzesuwanieWynik<>(lista == null ? List.of() : lista, new PrzesuwaniePlan());
 	}
 
 }
