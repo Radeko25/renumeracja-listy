@@ -1,6 +1,7 @@
 package pl.com.razi.listy.przesuwanie;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -161,6 +162,69 @@ class PrzesuwanieSqlIT {
 					baza.setAutoCommit(true);
 				}
 				ddl.executeUpdate("DROP TABLE " + tabela);
+			}
+		}
+	}
+
+	@Test
+	void sqlServerRozpoznajeKolumnyWedlugKatalogu() throws SQLException {
+		String nazwa = "Spis." + UUID.randomUUID().toString().substring(0, 8);
+		String cel = "[" + nazwa + "]";
+		try (var baza = polacz(DialektSql.SQL_SERVER); var ddl = baza.createStatement()) {
+			ddl.executeUpdate("CREATE TABLE " + cel + " (id int PRIMARY KEY, [lp] int NOT NULL)");
+			try {
+				int idTabeli;
+				boolean rozrozniaWielkoscLiter;
+				try (var pytanie = baza.prepareStatement("""
+						SELECT id, COLUMNPROPERTY(id, N'LP', 'ColumnId'),
+						       CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS nvarchar(128))
+						FROM (SELECT OBJECT_ID(?, N'U') AS id) AS t
+						""")) {
+					pytanie.setNString(1, cel);
+					try (var meta = pytanie.executeQuery()) {
+						assertTrue(meta.next());
+						idTabeli = meta.getInt(1);
+						assertFalse(meta.wasNull());
+						rozrozniaWielkoscLiter = meta.getObject(2) == null;
+						System.out.println("SQL Server | kolacja: " + meta.getString(3) + " | rozróżnia lp i LP: " + rozrozniaWielkoscLiter);
+					}
+				}
+				var blad = assertThrows(IllegalArgumentException.class,
+						() -> PrzykladKolumnSqlServer.zKatalogu(baza, idTabeli, "lp", "LP"));
+				assertEquals(rozrozniaWielkoscLiter ? "Tabela lub kolumna jest niedostępna w katalogu."
+						: "LP i grupa wskazują tę samą kolumnę.", blad.getMessage());
+
+				String grupa = rozrozniaWielkoscLiter ? "LP" : "Id listy";
+				ddl.executeUpdate("ALTER TABLE " + cel + " ADD [" + grupa + "] int NOT NULL");
+				ddl.executeUpdate("ALTER TABLE " + cel + " ADD UNIQUE ([" + grupa + "], [lp])");
+				ddl.executeUpdate("INSERT INTO " + cel + " VALUES (1,1,10), (2,2,10), (3,1,20), (4,2,20)");
+				var definicja = PrzykladKolumnSqlServer.zKatalogu(baza, idTabeli,
+						rozrozniaWielkoscLiter ? "lp" : "LP", rozrozniaWielkoscLiter ? "LP" : "ID LISTY");
+				assertEquals(new TabelaSql(baza.getSchema(), nazwa, "lp"), definicja.tabela());
+				assertEquals(grupa, definicja.kolumnaGrupy());
+				assertThrows(IllegalArgumentException.class, () -> PrzykladKolumnSqlServer.zKatalogu(baza, idTabeli, "lp", "lp"));
+				assertThrows(IllegalArgumentException.class, () -> PrzykladKolumnSqlServer.zKatalogu(baza, idTabeli, "lp", "Brak kolumny"));
+
+				var plan = new PrzesuwaniePlan();
+				plan.dodaj(1, 1, 1);
+				plan.dodaj(2, 2, -1);
+				baza.setAutoCommit(false);
+				for (String sql : plan.toSql(DialektSql.SQL_SERVER, definicja.tabela(), definicja.kolumnaGrupy())) {
+					assertEquals(2, wykonaj(baza, sql, 10));
+				}
+				try (var wynik = ddl.executeQuery("SELECT [lp] FROM " + cel + " ORDER BY id")) {
+					var pozycje = new ArrayList<Integer>();
+					while (wynik.next()) {
+						pozycje.add(wynik.getInt(1));
+					}
+					assertEquals(List.of(2, 1, 1, 2), pozycje);
+				}
+			} finally {
+				if (!baza.getAutoCommit()) {
+					baza.rollback();
+					baza.setAutoCommit(true);
+				}
+				ddl.executeUpdate("DROP TABLE " + cel);
 			}
 		}
 	}
