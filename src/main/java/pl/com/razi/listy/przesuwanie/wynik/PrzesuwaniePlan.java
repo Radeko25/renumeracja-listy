@@ -102,8 +102,14 @@ public class PrzesuwaniePlan {
 		return pojedynczyCase(tabela.celGrupy(dialekt, kolumnyGrupy));
 	}
 
-	/** Pojedynczy CASE dla tabeli, która w całości stanowi jedną listę. */
+	/** @deprecated Użyj {@link #toSqlCaseWhenBlokiDlaCalejTabeli(DialektSql, TabelaSql)}. */
+	@Deprecated(forRemoval = false)
 	public String toSqlCaseWhenBloki(DialektSql dialekt, TabelaSql tabela) {
+		return toSqlCaseWhenBlokiDlaCalejTabeli(dialekt, tabela);
+	}
+
+	/** Pojedynczy CASE dla tabeli, która w całości stanowi jedną listę. */
+	public String toSqlCaseWhenBlokiDlaCalejTabeli(DialektSql dialekt, TabelaSql tabela) {
 		return pojedynczyCase(tabela.cel(dialekt));
 	}
 
@@ -132,8 +138,14 @@ public class PrzesuwaniePlan {
 		return sqlDlaDialektu(dialekt, tabela.celGrupy(dialekt, kolumnyGrupy));
 	}
 
-	/** Zapis dla tabeli, która w całości stanowi jedną listę. */
+	/** @deprecated Użyj {@link #toSqlDlaCalejTabeli(DialektSql, TabelaSql)}. */
+	@Deprecated(forRemoval = false)
 	public List<String> toSql(DialektSql dialekt, TabelaSql tabela) {
+		return toSqlDlaCalejTabeli(dialekt, tabela);
+	}
+
+	/** Zapis zakresów LP bez filtra grupy. Cała tabela musi stanowić jedną listę. */
+	public List<String> toSqlDlaCalejTabeli(DialektSql dialekt, TabelaSql tabela) {
 		return sqlDlaDialektu(dialekt, tabela.cel(dialekt));
 	}
 

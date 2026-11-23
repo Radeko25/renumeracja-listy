@@ -1,16 +1,23 @@
 package pl.com.razi.listy.przesuwanie;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -22,6 +29,7 @@ import pl.com.razi.listy.przesuwanie.wynik.TabelaSql;
 /** Profil Maven testy-baz uruchamia te same operacje na czterech silnikach. */
 class PrzesuwanieSqlIT {
 	private record Wiersz(int id, int lp) {}
+	private record Widok(long wersja, List<Wiersz> wiersze) {}
 
 	@ParameterizedTest(name = "{0} – pełna lista, widok, UNIQUE i wycofanie transakcji")
 	@EnumSource(DialektSql.class)
@@ -157,6 +165,96 @@ class PrzesuwanieSqlIT {
 		}
 	}
 
+	@ParameterizedTest(name = "{0} – dwie sesje przeciągają ten sam rekord z wersji 7")
+	@EnumSource(DialektSql.class)
+	void tylkoJednaSesjaZatwierdzaRuch(DialektSql dialekt, @TempDir Path katalog) throws Exception {
+		String plik = katalog.resolve("listy.db").toString();
+		String nazwa = "rn_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+		var tabela = new TabelaSql(nazwa, "lp");
+		String elementy = "\"" + nazwa + "\"";
+		String listy = nazwa + "_l";
+		String sqlWersji = "UPDATE " + listy + " SET wersja = wersja + 1 WHERE id = ? AND wersja = ?";
+		try (var kontrola = polacz(dialekt, plik); var ddl = kontrola.createStatement()) {
+			ddl.executeUpdate("CREATE TABLE " + listy + " (id INTEGER PRIMARY KEY, wersja INTEGER NOT NULL)");
+			try {
+				ddl.executeUpdate("CREATE TABLE " + elementy + " (id INTEGER PRIMARY KEY, \"id_listy\" INTEGER NOT NULL,"
+						+ " \"lp\" INTEGER NOT NULL, widoczny INTEGER NOT NULL, UNIQUE (\"id_listy\", \"lp\"),"
+						+ " CHECK (id <> 1 OR \"lp\" <> 2))");
+				try {
+					ddl.executeUpdate("INSERT INTO " + listy + " VALUES (1, 7)");
+					ddl.executeUpdate("INSERT INTO " + listy + " VALUES (2, 11)");
+					try (var dodaj = kontrola.prepareStatement("INSERT INTO " + elementy + " VALUES (?, ?, ?, ?)")) {
+						for (int id = 1; id <= 6; id++) {
+							dodaj.setInt(1, id);
+							dodaj.setInt(2, id <= 4 ? 1 : 2);
+							dodaj.setInt(3, id <= 4 ? id : id - 4);
+							dodaj.setInt(4, id == 3 ? 0 : 1);
+							dodaj.executeUpdate();
+						}
+					}
+					String widok = "SELECT l.wersja, e.id, e.\"lp\" FROM " + listy + " l JOIN " + elementy
+							+ " e ON e.\"id_listy\" = l.id WHERE l.id = ?";
+					var start = new CyclicBarrier(2);
+					var pula = Executors.newFixedThreadPool(2);
+					try {
+						var pierwsza = pula.submit(() -> ruchUzytkownika(dialekt, plik, tabela, widok, sqlWersji, start));
+						var druga = pula.submit(() -> ruchUzytkownika(dialekt, plik, tabela, widok, sqlWersji, start));
+						assertNotEquals(pierwsza.get(40, TimeUnit.SECONDS), druga.get(40, TimeUnit.SECONDS));
+					} finally {
+						pula.shutdownNow();
+						assertTrue(pula.awaitTermination(15, TimeUnit.SECONDS));
+					}
+					var poRuchu = new Widok(8, List.of(new Wiersz(1, 1), new Wiersz(4, 2), new Wiersz(3, 3), new Wiersz(2, 4)));
+					assertEquals(poRuchu, odczytajWidok(kontrola, widok, 1));
+					assertEquals(new Widok(11, List.of(new Wiersz(5, 1), new Wiersz(6, 2))), odczytajWidok(kontrola, widok, 2));
+
+					// CHECK odrzuca ruch po zwiększeniu wersji, a na PostgreSQL i SQLite po pierwszym UPDATE pozycji.
+					var odrzucony = new PrzesuwaniePlan();
+					odrzucony.dodaj(1, 1, 1);
+					odrzucony.dodaj(2, 2, -1);
+					try (var zapis = polacz(dialekt, plik); var wersja = zapis.prepareStatement(sqlWersji)) {
+						zapis.setAutoCommit(false);
+						assertThrows(SQLException.class, () -> PrzykladZapisuJdbc.zapisz(wersja, 1, 8, odrzucony, dialekt, tabela));
+						assertEquals(poRuchu, odczytajWidok(zapis, widok, 1));
+						zapis.rollback();
+					}
+				} finally {
+					ddl.executeUpdate("DROP TABLE " + elementy);
+				}
+			} finally {
+				ddl.executeUpdate("DROP TABLE " + listy);
+			}
+		}
+	}
+
+	private boolean ruchUzytkownika(DialektSql dialekt, String plik, TabelaSql tabela, String widok, String sqlWersji,
+			CyclicBarrier start) throws Exception {
+		try (var baza = polacz(dialekt, plik); var wersja = baza.prepareStatement(sqlWersji)) {
+			var odczyt = odczytajWidok(baza, widok + " AND e.widoczny = 1", 1);
+			assertEquals(new Widok(7, List.of(new Wiersz(1, 1), new Wiersz(2, 2), new Wiersz(4, 4))), odczyt);
+			var obsluga = new PrzesuwanieObsluga.Builder<Wiersz>().build();
+			var plan = obsluga.przesunPelny(odczyt.wiersze(), List.of(odczyt.wiersze().get(2)), -1, Wiersz::lp).getPlan();
+			start.await(20, TimeUnit.SECONDS);
+			baza.setAutoCommit(false);
+			return PrzykladZapisuJdbc.zapisz(wersja, 1, odczyt.wersja(), plan, dialekt, tabela);
+		}
+	}
+
+	private Widok odczytajWidok(Connection baza, String sql, int idListy) throws SQLException {
+		try (var zapytanie = baza.prepareStatement(sql + " ORDER BY e.\"lp\"")) {
+			zapytanie.setInt(1, idListy);
+			try (var dane = zapytanie.executeQuery()) {
+				assertTrue(dane.next());
+				long wersja = dane.getLong(1);
+				var wiersze = new ArrayList<Wiersz>();
+				do {
+					wiersze.add(new Wiersz(dane.getInt(2), dane.getInt(3)));
+				} while (dane.next());
+				return new Widok(wersja, wiersze);
+			}
+		}
+	}
+
 	@Test
 	void sqlitePrzesuwaPonadTysiacRozdzielonychPozycji() throws Exception {
 		try (var baza = polacz(DialektSql.SQLITE); var polecenie = baza.createStatement()) {
@@ -228,8 +326,12 @@ class PrzesuwanieSqlIT {
 	}
 
 	private Connection polacz(DialektSql dialekt) throws SQLException {
+		return polacz(dialekt, ":memory:");
+	}
+
+	private Connection polacz(DialektSql dialekt, String plikSqlite) throws SQLException {
 		if (dialekt == DialektSql.SQLITE) {
-			return DriverManager.getConnection("jdbc:sqlite::memory:");
+			return DriverManager.getConnection("jdbc:sqlite:" + plikSqlite);
 		}
 		String prefix = "RENUM_" + dialekt.name() + "_";
 		return DriverManager.getConnection(wymagana(prefix + "URL"), wymagana(prefix + "USER"), wymagana(prefix + "PASSWORD"));

@@ -22,7 +22,7 @@ public record TabelaSql(String schemat, String nazwa, String kolumnaLp) {
 
 	Cel celGrupy(DialektSql dialekt, String[] kolumnyGrupy) {
 		if (kolumnyGrupy == null || kolumnyGrupy.length == 0) {
-			throw new IllegalArgumentException("Podaj kolumny grupy. Dla całej tabeli wywołaj metodę bez tego argumentu.");
+			throw new IllegalArgumentException("Podaj kolumny grupy. Dla tabeli z jedną listą użyj wariantu DlaCalejTabeli.");
 		}
 		return cel(dialekt, kolumnyGrupy);
 	}
@@ -31,12 +31,23 @@ public record TabelaSql(String schemat, String nazwa, String kolumnaLp) {
 		Objects.requireNonNull(dialekt, "dialekt");
 		String tabela = cytuj(dialekt, nazwa);
 		String kwalifikowana = schemat == null ? tabela : cytuj(dialekt, schemat) + "." + tabela;
+		String lp = cytujKolumne(dialekt, kolumnaLp);
+		// Nazwy z katalogu mają dokładną pisownię. SQLite utożsamia też warianty liter ASCII.
+		var nazwaLp = Pattern.compile(kolumnaLp, Pattern.LITERAL | (dialekt == DialektSql.SQLITE ? Pattern.CASE_INSENSITIVE : 0));
 		var warunek = new StringJoiner(" AND ");
 		for (String kolumna : kolumnyGrupy) {
+			String nazwaKolumny = cytujKolumne(dialekt, kolumna);
+			sprawdzKolumneGrupy(nazwaLp, kolumna);
 			// Kwalifikacja wyklucza interpretację nieznanej kolumny jako literału w SQLite.
-			warunek.add(tabela + "." + cytujKolumne(dialekt, kolumna) + " = ?");
+			warunek.add(tabela + "." + nazwaKolumny + " = ?");
 		}
-		return new Cel(kwalifikowana, cytujKolumne(dialekt, kolumnaLp), warunek.toString());
+		return new Cel(kwalifikowana, lp, warunek.toString());
+	}
+
+	private static void sprawdzKolumneGrupy(Pattern nazwaLp, String kolumnaGrupy) {
+		if (nazwaLp.matcher(kolumnaGrupy).matches()) {
+			throw new IllegalArgumentException("Kolumna LP nie może być kolumną grupy.");
+		}
 	}
 
 	private static String cytujKolumne(DialektSql dialekt, String nazwa) {
@@ -81,18 +92,21 @@ public record TabelaSql(String schemat, String nazwa, String kolumnaLp) {
 		String nazwaTabeli = tabela.substring(tabela.lastIndexOf('.') + 1);
 		String tekst = where == null ? "" : where.strip();
 		var rownosc = ROWNOSC.matcher(tekst);
+		var nazwaLp = Pattern.compile(lp, Pattern.LITERAL | Pattern.CASE_INSENSITIVE);
 		var warunek = new StringBuilder();
 		int od = 0;
 		while (od < tekst.length()) {
 			if (!rownosc.region(od, tekst.length()).lookingAt()) {
 				throw new IllegalArgumentException("Podaj prosty warunek grupy lub użyj TabelaSql z kolumnami grupy.");
 			}
+			String kolumna = rownosc.group(1);
+			sprawdzKolumneGrupy(nazwaLp, kolumna);
 			String wartosc = rownosc.group(2);
 			String spojnik = rownosc.group(3);
 			if (!wartosc.equals("?") && (od != 0 || spojnik != null)) {
 				throw new IllegalArgumentException("W warunku z kilkoma porównaniami użyj parametrów JDBC.");
 			}
-			warunek.append(nazwaTabeli).append('.').append(rownosc.group(1)).append(" = ").append(wartosc);
+			warunek.append(nazwaTabeli).append('.').append(kolumna).append(" = ").append(wartosc);
 			if (spojnik != null) {
 				warunek.append(spojnik.equalsIgnoreCase("AND") ? " AND " : " OR ");
 			}

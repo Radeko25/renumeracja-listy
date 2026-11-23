@@ -37,29 +37,61 @@ class TabelaSqlTest {
 			assertEquals(2L, sql.chars().filter(c -> c == '?').count());
 		}
 		assertTrue(plan.toSqlCaseWhenBloki(dialekt, tabela, "Order", "Id listy").contains(filtr));
-		assertFalse(plan.toSqlCaseWhenBloki(dialekt, tabela).contains("?"));
+		assertFalse(plan.toSqlCaseWhenBlokiDlaCalejTabeli(dialekt, tabela).contains("?"));
 		var pusty = new PrzesuwaniePlan();
 		assertEquals(List.of(), pusty.toSql(dialekt, tabela, "Order"));
-		assertEquals("", pusty.toSqlCaseWhenBloki(dialekt, tabela));
+		assertEquals("", pusty.toSqlCaseWhenBlokiDlaCalejTabeli(dialekt, tabela));
+	}
+
+	@SuppressWarnings("deprecation")
+	@ParameterizedTest
+	@EnumSource(DialektSql.class)
+	void zgodnyZapisDlaTabeliZJednaLista(DialektSql dialekt) {
+		var tabela = new TabelaSql("Spis", "lp");
+		for (var sprawdzany : List.of(plan, new PrzesuwaniePlan())) {
+			assertEquals(sprawdzany.toSql(dialekt, tabela), sprawdzany.toSqlDlaCalejTabeli(dialekt, tabela));
+			assertEquals(sprawdzany.toSqlCaseWhenBloki(dialekt, tabela),
+					sprawdzany.toSqlCaseWhenBlokiDlaCalejTabeli(dialekt, tabela));
+		}
+	}
+
+	@ParameterizedTest
+	@EnumSource(DialektSql.class)
+	void odrzucaKolumnePozycjiWGrupie(DialektSql dialekt) {
+		var tabela = new TabelaSql("Spis", "Nr. pozycji");
+		assertThrows(IllegalArgumentException.class, () -> plan.toSql(dialekt, tabela, "Id listy", "Nr. pozycji"));
+		assertThrows(IllegalArgumentException.class, () -> plan.toSqlCaseWhenBloki(dialekt, tabela, "Nr. pozycji"));
+		assertThrows(IllegalArgumentException.class, () -> plan.toSql(dialekt, "Spis", "lp", "grupa = ? AND LP = ?"));
+		assertThrows(IllegalArgumentException.class, () -> plan.toSqlCaseWhenBloki("Spis", "lp", "Lp = 2"));
+	}
+
+	@Test
+	void rozrozniaFizyczneNazwyKolumnZKatalogu() {
+		var tabela = new TabelaSql("Spis", "Łp");
+		assertThrows(IllegalArgumentException.class, () -> plan.toSql(DialektSql.SQLITE, tabela, "ŁP"));
+		assertDoesNotThrow(() -> plan.toSql(DialektSql.SQLITE, tabela, "łp"));
+		for (var dialekt : List.of(DialektSql.POSTGRESQL, DialektSql.ORACLE, DialektSql.SQL_SERVER)) {
+			assertDoesNotThrow(() -> plan.toSql(dialekt, tabela, "ŁP"));
+		}
 	}
 
 	@Test
 	void cytujeZnakiIdentyfikatoraZgodnieZDialektem() {
 		var tabela = new TabelaSql("Arkusz \"A\"", "Nr] pozycji");
 		for (var dialekt : List.of(DialektSql.POSTGRESQL, DialektSql.SQLITE)) {
-			assertTrue(plan.toSql(dialekt, tabela).get(0).startsWith("UPDATE \"Arkusz \"\"A\"\"\"\nSET \"Nr] pozycji\""));
+			assertTrue(plan.toSqlDlaCalejTabeli(dialekt, tabela).get(0).startsWith("UPDATE \"Arkusz \"\"A\"\"\"\nSET \"Nr] pozycji\""));
 		}
-		assertTrue(plan.toSql(DialektSql.SQL_SERVER, tabela).get(0).startsWith("UPDATE [Arkusz \"A\"]\nSET [Nr]] pozycji]"));
-		assertThrows(IllegalArgumentException.class, () -> plan.toSql(DialektSql.ORACLE, tabela));
-		assertThrows(IllegalArgumentException.class, () -> plan.toSql(DialektSql.ORACLE, new TabelaSql("Tabela", "ROWID")));
+		assertTrue(plan.toSqlDlaCalejTabeli(DialektSql.SQL_SERVER, tabela).get(0).startsWith("UPDATE [Arkusz \"A\"]\nSET [Nr]] pozycji]"));
+		assertThrows(IllegalArgumentException.class, () -> plan.toSqlDlaCalejTabeli(DialektSql.ORACLE, tabela));
+		assertThrows(IllegalArgumentException.class, () -> plan.toSqlDlaCalejTabeli(DialektSql.ORACLE, new TabelaSql("Tabela", "ROWID")));
 	}
 
 	@ParameterizedTest
 	@EnumSource(DialektSql.class)
 	void odrzucaBlednaNazweTakzeWKolumnieGrupy(DialektSql dialekt) {
 		for (String nazwa : List.of("", " ", "spis\0A", "\uD800")) {
-			assertThrows(IllegalArgumentException.class, () -> plan.toSql(dialekt, new TabelaSql(nazwa, "lp")));
-			assertThrows(IllegalArgumentException.class, () -> plan.toSql(dialekt, new TabelaSql(nazwa, "Spis", "lp")));
+			assertThrows(IllegalArgumentException.class, () -> plan.toSqlDlaCalejTabeli(dialekt, new TabelaSql(nazwa, "lp")));
+			assertThrows(IllegalArgumentException.class, () -> plan.toSqlDlaCalejTabeli(dialekt, new TabelaSql(nazwa, "Spis", "lp")));
 			assertThrows(IllegalArgumentException.class, () -> plan.toSql(dialekt, new TabelaSql("Spis", "lp"), nazwa));
 		}
 		assertThrows(IllegalArgumentException.class, () -> plan.toSql(dialekt, new TabelaSql("Spis", "lp"), (String) null));
@@ -71,12 +103,12 @@ class TabelaSqlTest {
 	@Test
 	void odrzucaZbytDlugieNazwyZamiastRyzykowacIchSkrocenie() {
 		String pg = "ą".repeat(31) + "a";
-		assertDoesNotThrow(() -> plan.toSql(DialektSql.POSTGRESQL, new TabelaSql(pg, "lp")));
-		assertThrows(IllegalArgumentException.class, () -> plan.toSql(DialektSql.POSTGRESQL, new TabelaSql(pg + "a", "lp")));
-		assertDoesNotThrow(() -> plan.toSql(DialektSql.ORACLE, new TabelaSql("ą".repeat(64), "lp")));
-		assertThrows(IllegalArgumentException.class, () -> plan.toSql(DialektSql.ORACLE, new TabelaSql("ą".repeat(65), "lp")));
-		assertDoesNotThrow(() -> plan.toSql(DialektSql.SQL_SERVER, new TabelaSql("a".repeat(128), "lp")));
-		assertThrows(IllegalArgumentException.class, () -> plan.toSql(DialektSql.SQL_SERVER, new TabelaSql("a".repeat(129), "lp")));
+		assertDoesNotThrow(() -> plan.toSqlDlaCalejTabeli(DialektSql.POSTGRESQL, new TabelaSql(pg, "lp")));
+		assertThrows(IllegalArgumentException.class, () -> plan.toSqlDlaCalejTabeli(DialektSql.POSTGRESQL, new TabelaSql(pg + "a", "lp")));
+		assertDoesNotThrow(() -> plan.toSqlDlaCalejTabeli(DialektSql.ORACLE, new TabelaSql("ą".repeat(64), "lp")));
+		assertThrows(IllegalArgumentException.class, () -> plan.toSqlDlaCalejTabeli(DialektSql.ORACLE, new TabelaSql("ą".repeat(65), "lp")));
+		assertDoesNotThrow(() -> plan.toSqlDlaCalejTabeli(DialektSql.SQL_SERVER, new TabelaSql("a".repeat(128), "lp")));
+		assertThrows(IllegalArgumentException.class, () -> plan.toSqlDlaCalejTabeli(DialektSql.SQL_SERVER, new TabelaSql("a".repeat(129), "lp")));
 	}
 
 	@Test

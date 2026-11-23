@@ -114,7 +114,7 @@ for (String sql : polecenia) {
 }
 ```
 
-Gdy cała tabela stanowi jedną listę, wywołaj `plan.toSql(dialekt, tabela)`. Przekazanie pustej tablicy kolumn grupy do wariantu z filtrem powoduje wyjątek.
+Gdy cała tabela stanowi jedną listę, wywołaj `plan.toSqlDlaCalejTabeli(dialekt, tabela)`. Metoda obejmuje w całej tabeli pozycje LP wskazane przez plan. W tabeli z kilkoma listami te same LP mogą wystąpić w każdej grupie, dlatego przekaż kolumny grupy do `toSql`. Przekazanie pustej tablicy kolumn grupy powoduje wyjątek. Dla pojedynczego `CASE` istnieje analogiczna metoda `toSqlCaseWhenBlokiDlaCalejTabeli`. Dotychczasowe dwuargumentowe wywołania działają i są oznaczone jako przestarzałe.
 
 **Zgodność ze starszymi wywołaniami.** Sygnatury `toSql(dialekt, tabela, kolumnaLp, where)` i `toSqlCaseWhenBloki(tabela, kolumnaLp, where)` zachowują proste niecytowane nazwy, np. `dbo.Dokumenty`, oraz filtr ustalony przez aplikację. Obsługują pusty warunek, pojedyncze `id_kategorii = 3` i porównania z parametrami, np. `grupa = ? OR grupa = ?` lub `firma = ? AND lista = ?`. Inne fragmenty SQL zgłaszają `IllegalArgumentException`. Dla złożonego klucza listy przekaż kolumny do wariantu z `TabelaSql` i powiąż wartości przez JDBC. Dodatkowe reguły dostępu egzekwuje aplikacja lub baza.
 
@@ -135,13 +135,36 @@ Na SQLite 3.53.4 sprawdzono dodatkowo przesunięcie w widoku z ukrytymi wierszam
 
 Zapisane LP są dodatnimi liczbami całkowitymi i są unikalne w obrębie listy. W PostgreSQL i SQLite odpowiadające im wartości ujemne muszą być wolne i dozwolone na czas obu instrukcji. `CHECK (lp > 0)` odrzuci pierwszy krok. Trigger audytujący zmiany LP może zarejestrować także wartość pośrednią, a reguły dostępu muszą pozwalać na zapis w obu krokach. PostgreSQL przy `UNIQUE DEFERRABLE INITIALLY IMMEDIATE` pozwala też zamienić pozycje jednym `UPDATE`. Można wtedy użyć `toSqlCaseWhenBloki`. [PostgreSQL o sprawdzaniu unikalności](https://www.postgresql.org/docs/18/sql-createtable.html#SQL-CREATETABLE-COMPATIBILITY).
 
-Kolumny grupy muszą wskazywać tę samą listę przez całą operację, także po zmianie znaku LP. Aplikacja wyznacza zakres zapisu z uprawnień użytkownika do listy i jej wierszy.
+Kolumny grupy muszą wskazywać tę samą listę przez całą operację, także po zmianie znaku LP. Generator odrzuca kolumnę LP wśród kolumn grupy. Przy `TabelaSql` porównuje fizyczne nazwy z katalogu, w SQLite uwzględnia również warianty wielkości liter ASCII. W SQL Server reguły porównania nazw zależą od konfiguracji bazy, więc aplikacja przekazuje dokładną pisownię z katalogu. Starsze filtry z niecytowanymi nazwami ASCII odrzucają LP niezależnie od wielkości liter. Aplikacja sprawdza aktualne uprawnienia do listy i przesuwanych wierszy także przy zapisie. [Nazwy obiektów w SQL Server](https://learn.microsoft.com/en-us/sql/relational-databases/databases/database-identifiers) · [Porównywanie nazw w SQLite](https://www.sqlite.org/c3ref/stricmp.html).
 
-Wykonaj wszystkie instrukcje na jednym połączeniu z wyłączonym autocommitem. W każdej podstaw te same parametry. Liczba wierszy objętych każdą instrukcją powinna być sumą długości zakresów w planie. Błąd albo inna liczba wierszy wymaga wycofania całej transakcji. Plan wskazuje rekordy po LP. Jeśli inny użytkownik zdążył zamienić dwa rekordy, liczba zmienionych wierszy może się nadal zgadzać. Przy współbieżnej edycji wszyscy zapisujący powinni stosować wspólną blokadę listy od odczytu do zatwierdzenia albo atomowo sprawdzać i zwiększać wersję listy w tej samej transakcji co zapis. Po konflikcie wylicz plan ponownie z aktualnych danych.
+Wykonaj wszystkie instrukcje na jednym połączeniu z wyłączonym autocommitem. W każdej podstaw te same parametry. Liczba wierszy objętych każdą instrukcją powinna być sumą długości zakresów w planie. Błąd albo inna liczba wierszy wymaga wycofania całej transakcji. Plan wskazuje rekordy po LP. Jeśli inny użytkownik zdążył zamienić dwa rekordy, liczba zmienionych wierszy może się nadal zgadzać.
+
+### Dwie osoby przesuwają elementy tej samej listy
+
+Przy wyświetleniu listy odczytaj jej wersję i widoczne rekordy z tego samego spójnego obrazu bazy. Przyjmij z interfejsu identyfikator listy, wersję zapamiętaną w widoku i żądany ruch. Po sprawdzeniu uprawnień aplikacja wylicza plan dla tego widoku. Wystarcza jeden licznik na każdą niezależną numerację LP. Może znajdować się w istniejącym rekordzie listy. Każdy zapis zmieniający jej skład lub kolejność, również ukrytych elementów, korzysta z tej samej wersji w tej samej transakcji co zmiana.
+
+W przykładzie `listy.id` jest kluczem głównym, `listy.wersja` licznikiem całkowitym z wartością początkową i ograniczeniem `NOT NULL`, a elementy mają kolumnę grupy o fizycznej nazwie `id_listy`. Aplikacja otwiera osobne połączenie na czas zapisu.
+
+```java
+boolean zapisano;
+try (var baza = zrodloDanych.getConnection();
+     var podniesWersje = baza.prepareStatement(
+             "UPDATE listy SET wersja = wersja + 1 WHERE id = ? AND wersja = ?")) {
+    baza.setAutoCommit(false);
+    zapisano = PrzykladZapisuJdbc.zapisz(podniesWersje, idListy, wersjaWidoku, plan, dialekt, tabela);
+}
+if (!zapisano) {
+    odswiezListe(idListy);
+}
+```
+
+Przykład JDBC wykonuje plan po warunkowym zwiększeniu wersji dokładnie jednej listy. Sprawdza liczbę wierszy każdego polecenia, zatwierdza całość po sukcesie i wycofuje również wersję przy błędzie zapisu. Pusty plan pomija zapis. Dla dwóch osób z wersją 7 pierwszy zatwierdzony ruch podnosi wersję do 8. Druga osoba odświeża widok i może ponowić ruch z nowym planem. Błąd silnika, np. przekroczenie czasu oczekiwania na blokadę, wraca jako wyjątek JDBC. [Pełny przykład używany przez test dwóch sesji](src/test/java/pl/com/razi/listy/przesuwanie/PrzykladZapisuJdbc.java).
 
 ### Testy
 
-`mvn test` uruchamia testy algorytmu i generatora SQL. `mvn -Ptesty-baz test` sprawdza dodatkowo zapis przez JDBC na PostgreSQL, SQL Server, Oracle i SQLite. Profil korzysta ze zmiennych `RENUM_<DIALEKT>_URL`, `RENUM_<DIALEKT>_USER` i `RENUM_<DIALEKT>_PASSWORD` dla trzech serwerów. SQLite działa w pamięci w wersji dostarczanej przez sterownik JDBC. Testy sprawdzają `UNIQUE`, ukryte wiersze, wycofanie zmian, nazwy ze spacją i kropką oraz dwukolumnowy klucz grupy z wartością zawierającą apostrof. Osobny test SQLite przesuwa rekordy na 1100 widocznych pozycjach rozdzielonych ukrytymi wierszami. [Test generatora](src/test/java/pl/com/razi/listy/przesuwanie/TabelaSqlTest.java) · [Test integracyjny](src/test/java/pl/com/razi/listy/przesuwanie/PrzesuwanieSqlIT.java).
+`mvn test` uruchamia testy algorytmu i generatora SQL. `mvn -Ptesty-baz test` sprawdza dodatkowo zapis przez JDBC na PostgreSQL, SQL Server, Oracle i SQLite. Profil korzysta ze zmiennych `RENUM_<DIALEKT>_URL`, `RENUM_<DIALEKT>_USER` i `RENUM_<DIALEKT>_PASSWORD` dla trzech serwerów. SQLite działa przez sterownik JDBC. Dwa niezależne połączenia w teście współbieżności otwierają wspólny plik tymczasowy, a pozostałe testy korzystają z bazy w pamięci.
+
+Na każdym silniku dwie sesje odczytują wersję 7, czekają na siebie i jednocześnie próbują zapisać ten sam ruch. Test sprawdza jeden zatwierdzony zapis, jeden konflikt, wersję 8 oraz pozycje ukrytego wiersza i drugiej listy. Sprawdza również wycofanie wersji po błędzie zapisu pozycji. Pozostałe scenariusze obejmują `UNIQUE`, nazwy ze spacją i kropką oraz złożony klucz grupy z wartością zawierającą apostrof. Osobny test SQLite przesuwa rekordy na 1100 widocznych pozycjach rozdzielonych ukrytymi wierszami. [Test generatora](src/test/java/pl/com/razi/listy/przesuwanie/TabelaSqlTest.java) · [Testy integracyjne](src/test/java/pl/com/razi/listy/przesuwanie/PrzesuwanieSqlIT.java).
 
 ## Typowe scenariusze
 
