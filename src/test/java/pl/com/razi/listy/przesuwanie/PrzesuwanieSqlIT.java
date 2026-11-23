@@ -17,6 +17,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga.TrybPrzesuwania;
 import pl.com.razi.listy.przesuwanie.wynik.PrzesuwaniePlan;
 import pl.com.razi.listy.przesuwanie.wynik.PrzesuwaniePlan.DialektSql;
+import pl.com.razi.listy.przesuwanie.wynik.TabelaSql;
 
 /** Profil Maven testy-baz uruchamia te same operacje na czterech silnikach. */
 class PrzesuwanieSqlIT {
@@ -75,6 +76,77 @@ class PrzesuwanieSqlIT {
 				baza.rollback();
 				assertEquals(pelna, odczytaj(baza, tabela, 3, false));
 				assertEquals(obcaGrupa, odczytaj(baza, tabela, 9, false));
+			} finally {
+				if (!baza.getAutoCommit()) {
+					baza.rollback();
+					baza.setAutoCommit(true);
+				}
+				ddl.executeUpdate("DROP TABLE " + tabela);
+			}
+		}
+	}
+
+	@ParameterizedTest(name = "{0} – fizyczne nazwy użytkownika i wartości grupy w JDBC")
+	@EnumSource(DialektSql.class)
+	void renumerujeWskazanaListeWTabeliDefiniowanej(DialektSql dialekt) throws SQLException {
+		String nazwa = "Spis." + UUID.randomUUID().toString().substring(0, 8) + " A?";
+		boolean sqlServer = dialekt == DialektSql.SQL_SERVER;
+		String tabela = sqlServer ? "[" + nazwa + "]" : "\"" + nazwa + "\"";
+		String nazwaLp = switch (dialekt) {
+		case SQL_SERVER -> "Numer] pozycji";
+		case ORACLE -> "Numer pozycji";
+		default -> "Numer \"pozycji\"";
+		};
+		String lp = switch (dialekt) {
+		case SQL_SERVER -> "[Numer]] pozycji]";
+		case ORACLE -> "\"Numer pozycji\"";
+		default -> "\"Numer \"\"pozycji\"\"\"";
+		};
+		String grupa = sqlServer ? "[Order]" : "\"Order\"";
+		String projekt = sqlServer ? "[Id projektu]" : "\"Id projektu\"";
+		String mojZespol = "O'Connor";
+		try (var baza = polacz(dialekt); var ddl = baza.createStatement()) {
+			String schemat = dialekt == DialektSql.SQLITE ? "main" : baza.getSchema();
+			var definicja = new TabelaSql(schemat, nazwa, nazwaLp);
+			ddl.executeUpdate("CREATE TABLE " + tabela + " (id INTEGER PRIMARY KEY, " + grupa + " VARCHAR(40) NOT NULL, "
+					+ projekt + " INTEGER NOT NULL, " + lp + " INTEGER NOT NULL, UNIQUE (" + grupa + ", " + projekt + ", " + lp + "))");
+			try {
+				try (var dodaj = baza.prepareStatement("INSERT INTO " + tabela + " VALUES (?, ?, ?, ?)")) {
+					for (int id = 1; id <= 6; id++) {
+						dodaj.setInt(1, id);
+						dodaj.setString(2, id <= 4 ? mojZespol : "Inny zespół");
+						dodaj.setInt(3, id == 3 || id == 4 ? 2 : 1);
+						dodaj.setInt(4, id % 2 == 1 ? 1 : 2);
+						dodaj.executeUpdate();
+					}
+				}
+				baza.setAutoCommit(false);
+				var plan = new PrzesuwaniePlan();
+				plan.dodaj(1, 1, 1);
+				plan.dodaj(2, 2, -1);
+				for (String sql : plan.toSql(dialekt, definicja, "Order", "Id projektu")) {
+					try (var zapis = baza.prepareStatement(sql)) {
+						zapis.setString(1, mojZespol);
+						zapis.setInt(2, 1);
+						assertEquals(2, zapis.executeUpdate());
+					}
+				}
+				try (var odczyt = ddl.executeQuery("SELECT " + lp + " FROM " + tabela + " ORDER BY id")) {
+					var pozycje = new ArrayList<Integer>();
+					while (odczyt.next()) {
+						pozycje.add(odczyt.getInt(1));
+					}
+					assertEquals(List.of(2, 1, 1, 2, 1, 2), pozycje);
+				}
+				baza.rollback();
+				// Nieaktualna definicja kolumny grupy musi zakończyć zapis błędem.
+				String brakKolumny = plan.toSql(dialekt, definicja, "Dawna nazwa").get(0);
+				assertThrows(SQLException.class, () -> {
+					try (var zapis = baza.prepareStatement(brakKolumny)) {
+						zapis.setString(1, "Dawna nazwa");
+						zapis.executeUpdate();
+					}
+				});
 			} finally {
 				if (!baza.getAutoCommit()) {
 					baza.rollback();

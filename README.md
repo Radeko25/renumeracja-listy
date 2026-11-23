@@ -38,7 +38,9 @@ Jeśli tabela zwraca zaznaczone wiersze w kolejności listy źródłowej, można
 import java.util.List;
 import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga;
 import pl.com.razi.listy.przesuwanie.PrzesuwanieObsluga.TrybPrzesuwania;
+import pl.com.razi.listy.przesuwanie.wynik.PrzesuwaniePlan.DialektSql;
 import pl.com.razi.listy.przesuwanie.wynik.PrzesuwanieWynik;
+import pl.com.razi.listy.przesuwanie.wynik.TabelaSql;
 
 public class Przyklad {
     public static void main(String[] args) throws Exception {
@@ -52,7 +54,7 @@ public class Przyklad {
 
         System.out.println(wynik.getLista()); // [A, D, B, C, E]
         System.out.println(wynik.getPlan().toSqlCaseWhenBloki(
-                "Dokumenty", "lp", "id_kategorii = 3"));
+                DialektSql.POSTGRESQL, new TabelaSql("dokumenty", "lp"), "id_kategorii"));
     }
 }
 ```
@@ -71,13 +73,13 @@ lpOd = 4, lpDo = 4, offset = -2
 Metoda `toSqlCaseWhenBloki` zapisuje oba zakresy w jednej instrukcji SQL. Dla pustego planu, np. po zablokowanym przesunięciu, zwraca pusty tekst (`""`).
 
 ```sql
-UPDATE Dokumenty
-SET lp = CASE
-    WHEN lp BETWEEN 2 AND 3 THEN lp + 1
-    WHEN lp BETWEEN 4 AND 4 THEN lp - 2
-    ELSE lp
+UPDATE "dokumenty"
+SET "lp" = CASE
+    WHEN "lp" BETWEEN 2 AND 3 THEN "lp" + 1
+    WHEN "lp" BETWEEN 4 AND 4 THEN "lp" - 2
+    ELSE "lp"
 END
-WHERE (id_kategorii = 3) AND ((lp BETWEEN 2 AND 3) OR (lp BETWEEN 4 AND 4));
+WHERE ("dokumenty"."id_kategorii" = ?) AND (("lp" BETWEEN 2 AND 3) OR ("lp" BETWEEN 4 AND 4));
 ```
 
 ### Widoczna część listy
@@ -89,15 +91,36 @@ record Wiersz(String nazwa, int lp) {}
 var widoczne = List.of(new Wiersz("A", 1), new Wiersz("C", 3), new Wiersz("E", 5));
 var obsluga = new PrzesuwanieObsluga.Builder<Wiersz>().build();
 var wynik = obsluga.przesunPelny(widoczne, List.of(widoczne.get(2)), -1, Wiersz::lp);
-var polecenia = wynik.getPlan().toSql(PrzesuwaniePlan.DialektSql.POSTGRESQL,
-        "Dokumenty", "lp", "id_kategorii = ?");
+var tabela = new TabelaSql("public", "Moje dokumenty", "Numer pozycji");
+var polecenia = wynik.getPlan().toSql(DialektSql.POSTGRESQL, tabela, "Id kategorii");
 ```
 
-`PrzesuwaniePlan` znajduje się w pakiecie `pl.com.razi.listy.przesuwanie.wynik`. Wariant z funkcją `Wiersz::lp` wymaga dodatnich, ściśle rosnących LP. W każdym z trzech trybów permutuje dokładnie te pozycje. Zachowuje początkową globalną numerację, również gdy zawiera ona luki. Wariant trzyargumentowy zakłada, że lista reprezentuje kolejne LP od 1. Dla mutowalnych rekordów `wynik.ustawLp(setter)` przypisuje końcowe LP z widoku. Przeciążenie `ustawLp(int, setter)` służy do jawnego nadania nowej, ciągłej numeracji.
+`TabelaSql` i `PrzesuwaniePlan` znajdują się w pakiecie `pl.com.razi.listy.przesuwanie.wynik`. Wariant z funkcją `Wiersz::lp` wymaga dodatnich, ściśle rosnących LP. W każdym z trzech trybów permutuje dokładnie te pozycje. Zachowuje początkową globalną numerację, również gdy zawiera ona luki. Wariant trzyargumentowy zakłada, że lista reprezentuje kolejne LP od 1. Dla mutowalnych rekordów `wynik.ustawLp(setter)` przypisuje końcowe LP z widoku. Przeciążenie `ustawLp(int, setter)` służy do jawnego nadania nowej, ciągłej numeracji.
+
+### Tabele definiowane przez użytkowników
+
+Aplikacja sprawdza prawo użytkownika do zmiany kolejności na wybranej liście. Z zapisanej definicji tej listy odczytuje fizyczne nazwy schematu, tabeli, kolumny pozycji i kolumn grupy. Do `TabelaSql` przekazuje każdą nazwę osobno, dokładnie w pisowni z katalogu bazy, bez dodawania cudzysłowów. Kropka w nazwie tabeli jest jej częścią. Konstruktor dwuargumentowy pomija schemat. Generator cytuje każdy identyfikator według dialektu. Oracle wyklucza m.in. cudzysłów wewnątrz nazwy oraz kolumnę `ROWID`. Dla PostgreSQL generator przyjmuje standardowy limit 63 bajtów w UTF-8, aby serwer nie skrócił nazwy. [Identyfikatory PostgreSQL](https://www.postgresql.org/docs/18/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS) · [Nazwy obiektów w Oracle](https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/Database-Object-Names-and-Qualifiers.html).
+
+Każda podana kolumna grupy dodaje porównanie z parametrem `?`. Kilka kolumn, np. `"Id firmy", "Id listy"`, daje warunki połączone przez `AND`. Wartości wiąże się w tej samej kolejności w **każdej** instrukcji. W przykładzie powyżej zmieniają się dwa wiersze. Poniższy kod działa wewnątrz transakcji aplikacji, która zatwierdza całość po sukcesie i wycofuje ją po wyjątku.
+
+```java
+for (String sql : polecenia) {
+    try (var zapis = polaczenie.prepareStatement(sql)) {
+        zapis.setInt(1, idKategorii);
+        if (zapis.executeUpdate() != 2) {
+            throw new java.sql.SQLException("Lista zmieniła się od odczytu.");
+        }
+    }
+}
+```
+
+Gdy cała tabela stanowi jedną listę, wywołaj `plan.toSql(dialekt, tabela)`. Przekazanie pustej tablicy kolumn grupy do wariantu z filtrem powoduje wyjątek.
+
+**Zgodność ze starszymi wywołaniami.** Sygnatury `toSql(dialekt, tabela, kolumnaLp, where)` i `toSqlCaseWhenBloki(tabela, kolumnaLp, where)` zachowują proste niecytowane nazwy, np. `dbo.Dokumenty`, oraz filtr ustalony przez aplikację. Obsługują pusty warunek, pojedyncze `id_kategorii = 3` i porównania z parametrami, np. `grupa = ? OR grupa = ?` lub `firma = ? AND lista = ?`. Inne fragmenty SQL zgłaszają `IllegalArgumentException`. Dla złożonego klucza listy przekaż kolumny do wariantu z `TabelaSql` i powiąż wartości przez JDBC. Dodatkowe reguły dostępu egzekwuje aplikacja lub baza.
 
 ### Obsługiwane bazy i sprawdzone wersje
 
-`plan.toSql(dialekt, tabela, kolumnaLp, warunekGrupy)` zwraca kolejne instrukcje dla JDBC, bez końcowych średników. Dla pustego planu zwraca pustą listę. Wybór dialektu dotyczy wyłącznie zapisu. Starsza metoda `toSqlCaseWhenBloki` zwraca pojedynczy tekst z `CASE` do zastosowań, w których schemat dopuszcza taki zapis.
+`plan.toSql(dialekt, tabela, kolumnyGrupy)` zwraca kolejne instrukcje dla JDBC, bez końcowych średników. Dla pustego planu zwraca pustą listę. Wybór dialektu dotyczy wyłącznie zapisu. Metoda `toSqlCaseWhenBloki` zwraca pojedynczy tekst z `CASE` do zastosowań, w których schemat dopuszcza taki zapis.
 
 | Silnik | Dialekt | Wersja sprawdzona w testach JDBC | Zapis przy `UNIQUE (id_kategorii, lp)` |
 | --- | --- | --- | --- |
@@ -112,13 +135,13 @@ Na SQLite 3.53.4 sprawdzono dodatkowo przesunięcie w widoku z ukrytymi wierszam
 
 Zapisane LP są dodatnimi liczbami całkowitymi i są unikalne w obrębie listy. W PostgreSQL i SQLite odpowiadające im wartości ujemne muszą być wolne i dozwolone na czas obu instrukcji. `CHECK (lp > 0)` odrzuci pierwszy krok. Trigger audytujący zmiany LP może zarejestrować także wartość pośrednią, a reguły dostępu muszą pozwalać na zapis w obu krokach. PostgreSQL przy `UNIQUE DEFERRABLE INITIALLY IMMEDIATE` pozwala też zamienić pozycje jednym `UPDATE`. Można wtedy użyć `toSqlCaseWhenBloki`. [PostgreSQL o sprawdzaniu unikalności](https://www.postgresql.org/docs/18/sql-createtable.html#SQL-CREATETABLE-COMPATIBILITY).
 
-Warunek grupy musi ograniczać zapis do jednej listy i obowiązywać przez całą operację, także po zmianie znaku LP. Można przekazać pusty warunek, gdy tabela stanowi jedną listę. Nazwy tabeli i kolumny oraz treść warunku pochodzą z zaufanego kodu aplikacji. Wartości użytkownika podaje się jako parametry `PreparedStatement`.
+Kolumny grupy muszą wskazywać tę samą listę przez całą operację, także po zmianie znaku LP. Aplikacja wyznacza zakres zapisu z uprawnień użytkownika do listy i jej wierszy.
 
 Wykonaj wszystkie instrukcje na jednym połączeniu z wyłączonym autocommitem. W każdej podstaw te same parametry. Liczba wierszy objętych każdą instrukcją powinna być sumą długości zakresów w planie. Błąd albo inna liczba wierszy wymaga wycofania całej transakcji. Plan wskazuje rekordy po LP. Jeśli inny użytkownik zdążył zamienić dwa rekordy, liczba zmienionych wierszy może się nadal zgadzać. Przy współbieżnej edycji wszyscy zapisujący powinni stosować wspólną blokadę listy od odczytu do zatwierdzenia albo atomowo sprawdzać i zwiększać wersję listy w tej samej transakcji co zapis. Po konflikcie wylicz plan ponownie z aktualnych danych.
 
 ### Testy
 
-`mvn test` uruchamia testy algorytmu. `mvn -Ptesty-baz test` sprawdza dodatkowo zapis przez JDBC na PostgreSQL, SQL Server, Oracle i SQLite. Profil korzysta ze zmiennych `RENUM_<DIALEKT>_URL`, `RENUM_<DIALEKT>_USER` i `RENUM_<DIALEKT>_PASSWORD` dla trzech serwerów. SQLite działa w pamięci w wersji dostarczanej przez sterownik JDBC. Test tworzy własną tabelę z `UNIQUE`, odczytuje widok i sprawdza stan wszystkich rekordów oraz drugiej grupy po przesunięciu i po wycofaniu błędnego zapisu. Osobny test SQLite przesuwa rekordy na 1100 widocznych pozycjach rozdzielonych ukrytymi wierszami. [Test integracyjny](src/test/java/pl/com/razi/listy/przesuwanie/PrzesuwanieSqlIT.java).
+`mvn test` uruchamia testy algorytmu i generatora SQL. `mvn -Ptesty-baz test` sprawdza dodatkowo zapis przez JDBC na PostgreSQL, SQL Server, Oracle i SQLite. Profil korzysta ze zmiennych `RENUM_<DIALEKT>_URL`, `RENUM_<DIALEKT>_USER` i `RENUM_<DIALEKT>_PASSWORD` dla trzech serwerów. SQLite działa w pamięci w wersji dostarczanej przez sterownik JDBC. Testy sprawdzają `UNIQUE`, ukryte wiersze, wycofanie zmian, nazwy ze spacją i kropką oraz dwukolumnowy klucz grupy z wartością zawierającą apostrof. Osobny test SQLite przesuwa rekordy na 1100 widocznych pozycjach rozdzielonych ukrytymi wierszami. [Test generatora](src/test/java/pl/com/razi/listy/przesuwanie/TabelaSqlTest.java) · [Test integracyjny](src/test/java/pl/com/razi/listy/przesuwanie/PrzesuwanieSqlIT.java).
 
 ## Typowe scenariusze
 

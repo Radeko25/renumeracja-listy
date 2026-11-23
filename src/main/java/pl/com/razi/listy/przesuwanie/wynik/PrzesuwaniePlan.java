@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import pl.com.razi.listy.przesuwanie.wynik.TabelaSql.Cel;
+
 /**
  * Reprezentuje plan przesunięć powstały w wyniku operacji przemieszczenia
  * bloków elementów listy.
@@ -73,7 +75,8 @@ public class PrzesuwaniePlan {
 	/**
 	 * Generuje SQL w postaci instrukcji UPDATE z użyciem konstrukcji
 	 * {@code CASE WHEN}, opisującej wszystkie przesunięcia bloków.
-	 * Dla pustego planu zwraca pusty tekst.
+	 * Dla pustego planu zwraca pusty tekst. Ta sygnatura przyjmuje proste nazwy
+	 * i warunek grupy opisany w {@link #toSql(DialektSql, String, String, String)}.
 	 * <p>
 	 * Przykład:
 	 *
@@ -84,20 +87,57 @@ public class PrzesuwaniePlan {
 	 *     WHEN lp BETWEEN 10 AND 12 THEN lp - 2
 	 *     ELSE lp
 	 * END
-	 * WHERE (id_kategorii = 3) AND ((lp BETWEEN 5 AND 7) OR (lp BETWEEN 10 AND 12));
+	 * WHERE (Dokumenty.id_kategorii = 3) AND ((lp BETWEEN 5 AND 7) OR (lp BETWEEN 10 AND 12));
 	 * </pre>
 	 */
 	public String toSqlCaseWhenBloki(String tabela, String kolumnaLp, String where) {
-		return operacje.isEmpty() ? "" : sqlDocelowy(tabela, kolumnaLp, where, false) + ";";
+		return pojedynczyCase(TabelaSql.zProstegoZapisu(tabela, kolumnaLp, where));
 	}
 
 	/**
-	 * Instrukcje do wykonania po kolei w jednej transakcji JDBC. Nazwy i warunek
-	 * grupy są fragmentami SQL aplikacji. Warunek musi wskazywać tę samą listę
-	 * również w trakcie zmiany LP. PostgreSQL i SQLite potrzebują wolnych
-	 * ujemnych LP dostępnych do chwilowego zapisu przy zwykłym UNIQUE.
+	 * Pojedynczy CASE dla schematów pozwalających na taki zapis. Zasady nazw i
+	 * parametrów są takie jak w {@link #toSql(DialektSql, TabelaSql, String...)}.
+	 */
+	public String toSqlCaseWhenBloki(DialektSql dialekt, TabelaSql tabela, String... kolumnyGrupy) {
+		return pojedynczyCase(tabela.celGrupy(dialekt, kolumnyGrupy));
+	}
+
+	/** Pojedynczy CASE dla tabeli, która w całości stanowi jedną listę. */
+	public String toSqlCaseWhenBloki(DialektSql dialekt, TabelaSql tabela) {
+		return pojedynczyCase(tabela.cel(dialekt));
+	}
+
+	private String pojedynczyCase(Cel cel) {
+		return operacje.isEmpty() ? "" : sqlDocelowy(cel, false) + ";";
+	}
+
+	/**
+	 * Wariant zgodności dla prostych niecytowanych nazw i filtra aplikacji.
+	 * Obsługuje pusty filtr, równość kolumny z liczbą całkowitą oraz równości
+	 * z parametrami JDBC połączone przez AND lub OR. Odrzuca pozostałe wyrażenia.
+	 * Dla nazw z definicji użytkownika użyj przeciążenia z {@link TabelaSql}.
 	 */
 	public List<String> toSql(DialektSql dialekt, String tabela, String kolumnaLp, String where) {
+		return sqlDlaDialektu(dialekt, TabelaSql.zProstegoZapisu(tabela, kolumnaLp, where));
+	}
+
+	/**
+	 * Instrukcje do wykonania po kolei w jednej transakcji JDBC. Każda kolumna
+	 * grupy tworzy równość z jednym parametrem JDBC. Równości łączy AND.
+	 * W każdej instrukcji powiąż te same wartości w kolejności podanych kolumn.
+	 * Pusta tablica kolumn grupy jest błędem.
+	 * W PostgreSQL i SQLite tymczasowe ujemne LP muszą być dostępne do zapisu.
+	 */
+	public List<String> toSql(DialektSql dialekt, TabelaSql tabela, String... kolumnyGrupy) {
+		return sqlDlaDialektu(dialekt, tabela.celGrupy(dialekt, kolumnyGrupy));
+	}
+
+	/** Zapis dla tabeli, która w całości stanowi jedną listę. */
+	public List<String> toSql(DialektSql dialekt, TabelaSql tabela) {
+		return sqlDlaDialektu(dialekt, tabela.cel(dialekt));
+	}
+
+	private List<String> sqlDlaDialektu(DialektSql dialekt, Cel cel) {
 		Objects.requireNonNull(dialekt, "dialekt");
 		if (operacje.isEmpty()) {
 			return List.of();
@@ -108,29 +148,30 @@ public class PrzesuwaniePlan {
 			}
 		}
 		return switch (dialekt) {
-		case ORACLE, SQL_SERVER -> List.of(sqlDocelowy(tabela, kolumnaLp, where, false));
+		case ORACLE, SQL_SERVER -> List.of(sqlDocelowy(cel, false));
 		case POSTGRESQL, SQLITE -> List.of(
-				"UPDATE " + tabela + "\nSET " + kolumnaLp + " = -" + kolumnaLp + filtr(kolumnaLp, where, false),
-				sqlDocelowy(tabela, kolumnaLp, where, true));
+				"UPDATE " + cel.tabela() + "\nSET " + cel.lp() + " = -" + cel.lp() + filtr(cel, false),
+				sqlDocelowy(cel, true));
 		};
 	}
 
-	private String sqlDocelowy(String tabela, String lp, String where, boolean zUjemnych) {
+	private String sqlDocelowy(Cel cel, boolean zUjemnych) {
+		String lp = cel.lp();
 		String wartosc = zUjemnych ? "-" + lp : lp;
-		StringBuilder sql = new StringBuilder("UPDATE ").append(tabela).append("\nSET ").append(lp).append(" = CASE\n");
+		StringBuilder sql = new StringBuilder("UPDATE ").append(cel.tabela()).append("\nSET ").append(lp).append(" = CASE\n");
 		for (PrzesuwanieOperacja op : operacje) {
 			sql.append("    WHEN ").append(zakres(lp, op, zUjemnych)).append(" THEN ").append(wartosc)
 					.append(op.offset > 0 ? " + " : " - ").append(Math.abs((long) op.offset)).append("\n");
 		}
-		return sql.append("    ELSE ").append(lp).append("\nEND").append(filtr(lp, where, zUjemnych)).toString();
+		return sql.append("    ELSE ").append(lp).append("\nEND").append(filtr(cel, zUjemnych)).toString();
 	}
 
-	private String filtr(String lp, String where, boolean zUjemnych) {
+	private String filtr(Cel cel, boolean zUjemnych) {
 		StringBuilder sql = new StringBuilder("\nWHERE ");
-		if (where != null && !where.isBlank()) {
-			sql.append('(').append(where).append(") AND ");
+		if (!cel.warunek().isEmpty()) {
+			sql.append('(').append(cel.warunek()).append(") AND ");
 		}
-		dopiszZakresy(sql, lp, zUjemnych, 0, operacje.size());
+		dopiszZakresy(sql, cel.lp(), zUjemnych, 0, operacje.size());
 		return sql.toString();
 	}
 
